@@ -38,5 +38,12 @@ strict = true
 module = ["diffusers.*", "peft.*", "accelerate.*", "transformers.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# transformers ships no annotations, so nn.Module methods like eval() read as
+# untyped calls. The gap is the library's, not ours, and narrowing it to the
+# modules that touch it keeps the rest of the package strict.
+module = ["stylelora.score", "stylelora.train", "stylelora.generate"]
+disallow_untyped_calls = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
