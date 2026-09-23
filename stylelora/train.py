@@ -17,10 +17,11 @@ from __future__ import annotations
 import argparse
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
-from diffusers import AutoPipelineForText2Image, StableDiffusionPipeline
+from diffusers import AutoPipelineForText2Image, DDPMScheduler, StableDiffusionPipeline
 from diffusers.utils.state_dict_utils import convert_state_dict_to_diffusers
 from peft import LoraConfig, get_peft_model_state_dict
 from PIL import Image
@@ -79,6 +80,15 @@ def _load_pixels(paths: list[Path], device: str, dtype: torch.dtype) -> torch.Te
     ]
     stacked = torch.from_numpy(np.stack(arrays))  # (n, H, W, 3)
     return (stacked.permute(0, 3, 1, 2) / 127.5 - 1.0).to(device=device, dtype=dtype)
+
+
+def training_scheduler() -> Any:
+    """The forward process to fine-tune against.
+
+    Deliberately not the pipeline's own scheduler -- see the note in train().
+    Typed as Any because diffusers ships no annotations for its schedulers.
+    """
+    return DDPMScheduler.from_pretrained(BASE_MODEL, subfolder="scheduler")
 
 
 def check_finite(loss: torch.Tensor, step: int) -> None:
@@ -160,8 +170,21 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
     elif device == "cuda":
         torch.cuda.empty_cache()
 
+    # A separate scheduler for the forward process.
+    #
+    # sd-turbo ships EulerDiscreteScheduler, which is built for sampling: it
+    # adds noise as x + sigma * noise, reading sigma from a schedule prepared
+    # for inference. Handing it raw timesteps produced latents at a scale the
+    # UNet had never seen, and what the adapter learned was how to compensate
+    # for them -- both styles came out as the same smeared texture.
+    #
+    # sd-turbo is distilled from a model trained the DDPM way, so that is the
+    # objective its weights were shaped by and the one to fine-tune against.
+    # Inference keeps the Euler scheduler; only training uses this one.
+    noise_scheduler = training_scheduler()
+
     generator = torch.Generator(device="cpu").manual_seed(seed)
-    horizon = pipe.scheduler.config.num_train_timesteps
+    horizon = noise_scheduler.config.num_train_timesteps
     # Ten progress lines per run whatever its length: a long run that prints
     # nothing cannot be told apart from one that has hung.
     report_every = max(steps // 10, 1)
@@ -175,7 +198,7 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
         )
         timestep = torch.randint(0, horizon, (1,), generator=generator).to(device)
 
-        noisy = pipe.scheduler.add_noise(latent, noise, timestep)
+        noisy = noise_scheduler.add_noise(latent, noise, timestep)
         predicted = unet(noisy, timestep, encoder_hidden_states=embeds).sample
         # The whole of diffusion training: how wrong was the guess at the noise.
         # Computed in float32: the squared error of half-precision tensors

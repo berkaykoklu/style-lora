@@ -113,3 +113,21 @@ def test_images_are_encoded_in_chunks_not_all_at_once() -> None:
     from stylelora.train import ENCODE_BATCH
 
     assert ENCODE_BATCH < PER_STYLE
+
+
+def test_training_noise_comes_from_a_ddpm_schedule() -> None:
+    """sd-turbo ships a Euler scheduler built for sampling, which adds noise as
+    x + sigma * noise and reads sigma from an inference schedule. Training
+    against it put latents at a scale the UNet had never seen, and both styles
+    came out as the same smeared texture."""
+    from diffusers import DDPMScheduler
+
+    from stylelora.train import training_scheduler
+
+    scheduler = training_scheduler()
+
+    assert isinstance(scheduler, DDPMScheduler)
+    # alphas_cumprod is the DDPM forward process; a sampling scheduler has
+    # sigmas instead, which is exactly the mix-up this guards against.
+    assert hasattr(scheduler, "alphas_cumprod")
+    assert not hasattr(scheduler, "sigmas")
