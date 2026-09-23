@@ -24,6 +24,12 @@ CPU and the rest will take hours instead of minutes.
 !git clone -q https://github.com/berkaykoklu/style-lora
 %cd style-lora
 !pip install -q -e .
+
+# Colab ships torchao 0.10, and peft raises rather than shrugging when it finds
+# a version below 0.16 -- it checks before deciding which class to build the
+# LoRA layer from. Nothing here uses torchao, and peft skips the check quietly
+# when it is absent, so removing it is faster than upgrading it.
+!pip uninstall -y -q torchao
 ```
 
 ## 3. Fetch the training images
