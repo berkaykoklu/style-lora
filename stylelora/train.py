@@ -39,6 +39,10 @@ STEPS = 500
 # here as well would teach the model to wait for the word before applying it.
 CAPTION = "a painting"
 
+# How many images go through the VAE at once. Two fits comfortably; twenty in
+# one pass filled a 15 GB card before the first training step.
+ENCODE_BATCH = 2
+
 
 def _device() -> str:
     if torch.cuda.is_available():
@@ -120,10 +124,21 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
     # The images and the caption never change, so they are encoded once rather
     # than on every step.
     with torch.no_grad():
-        pixels = _load_pixels(paths, device, _dtype(device))
-        latents = pipe.vae.encode(pixels).latent_dist.sample() * pipe.vae.config.scaling_factor
+        # In chunks: the VAE's intermediate activations at 512x512 are large,
+        # and encoding twenty images in one pass asked a 15 GB card for 12.5 GB
+        # before training had started. Training itself runs one image at a time.
+        chunks = []
+        for start in range(0, len(paths), ENCODE_BATCH):
+            batch = _load_pixels(paths[start : start + ENCODE_BATCH], device, _dtype(device))
+            chunks.append(pipe.vae.encode(batch).latent_dist.sample())
+            del batch
+        latents = torch.cat(chunks) * pipe.vae.config.scaling_factor
+        del chunks
+
+        # One caption, encoded once. Every image trains against the same text,
+        # so twenty copies of it would be twenty copies of one answer.
         tokens = pipe.tokenizer(
-            [CAPTION] * len(paths),
+            [CAPTION],
             padding="max_length",
             max_length=pipe.tokenizer.model_max_length,
             truncation=True,
@@ -156,7 +171,7 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
         timestep = torch.randint(0, horizon, (1,), generator=generator).to(device)
 
         noisy = pipe.scheduler.add_noise(latent, noise, timestep)
-        predicted = unet(noisy, timestep, encoder_hidden_states=embeds[i : i + 1]).sample
+        predicted = unet(noisy, timestep, encoder_hidden_states=embeds).sample
         # The whole of diffusion training: how wrong was the guess at the noise.
         # Computed in float32: the squared error of half-precision tensors
         # underflows long before the values themselves do.
