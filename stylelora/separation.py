@@ -16,11 +16,20 @@ from stylelora.score import Vectors
 
 # How far apart is far enough.
 #
-# Measured on the real pair: Baroque holds together at 0.694 and Art Nouveau at
-# 0.656, while the two sit at 0.577 from each other -- a margin of 0.098. Half
-# of that is the bar, so a pair has to be about twice as coherent as it is
-# confusable before anything gets trained on it. Splitting one style in half
-# produces a margin near zero, which is the case this number has to refuse.
+# First measured on 20 training images per style: within 0.694 and 0.656,
+# between 0.577, margin 0.098. Half of that became the bar.
+#
+# Re-measured on 30 held-out images per style, which is what the centres are
+# actually built from: within 0.683 and 0.665, between 0.613, margin **0.061**.
+# The styles are half again as close as the first measurement said. Twenty
+# images each happened to be more distinct than the styles are; the gap did not
+# move, the estimate of it did.
+#
+# The floor is left at 0.05 because its job is unchanged -- splitting one style
+# in half produces a margin near zero and that is the case it has to refuse --
+# but 0.061 clears it narrowly, and this pair therefore sits near the limit of
+# what CLIP can resolve. Every effect measured downstream is bounded by it: no
+# adapter can hold the two styles further apart than the styles themselves are.
 MARGIN_FLOOR = 0.05
 
 
