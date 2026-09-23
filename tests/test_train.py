@@ -131,3 +131,13 @@ def test_training_noise_comes_from_a_ddpm_schedule() -> None:
     # sigmas instead, which is exactly the mix-up this guards against.
     assert hasattr(scheduler, "alphas_cumprod")
     assert not hasattr(scheduler, "sigmas")
+
+
+def test_training_stays_in_the_noise_range_the_model_samples() -> None:
+    """sd-turbo visits [999, 499] at two steps. Training uniformly across the
+    whole schedule spent half its gradient where inference never goes, and
+    both styles came out as the same warm blur."""
+    from stylelora.train import TIMESTEP_FLOOR
+
+    assert TIMESTEP_FLOOR >= 499
+    assert TIMESTEP_FLOOR < 999

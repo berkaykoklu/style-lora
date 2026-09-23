@@ -49,6 +49,17 @@ ENCODE_BATCH = 2
 # the saver, which is exactly how the adapter came to be silently ignored.
 WEIGHTS_NAME = "pytorch_lora_weights.safetensors"
 
+# The lowest noise level training samples from.
+#
+# sd-turbo is distilled to generate in very few steps, and at two steps it
+# visits exactly [999, 499]. Training uniformly across 0-999 therefore spent
+# half its gradient on a regime that never runs at inference, and what
+# survived into the regime that does run was a low-frequency wash: both styles
+# came out as the same warm blur, whatever they were trained on.
+#
+# Measured with EulerDiscreteScheduler.set_timesteps(2) on this model.
+TIMESTEP_FLOOR = 499
+
 
 def _device() -> str:
     if torch.cuda.is_available():
@@ -196,7 +207,9 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
         noise = torch.randn(latent.shape, generator=generator).to(
             device=device, dtype=latent.dtype
         )
-        timestep = torch.randint(0, horizon, (1,), generator=generator).to(device)
+        timestep = torch.randint(
+            TIMESTEP_FLOOR, horizon, (1,), generator=generator
+        ).to(device)
 
         noisy = noise_scheduler.add_noise(latent, noise, timestep)
         predicted = unet(noisy, timestep, encoder_hidden_states=embeds).sample
