@@ -128,10 +128,30 @@ def check_finite(loss: torch.Tensor, step: int) -> None:
         raise RuntimeError(f"loss became {loss.item()} at step {step}; weights are not usable")
 
 
-def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0) -> Path:
-    paths = sorted(images.glob("*.png"))
+def train(
+    style: str,
+    images: Path,
+    out: Path,
+    steps: int = STEPS,
+    seed: int = 0,
+    rank: int = RANK,
+    limit: int | None = None,
+) -> Path:
+    """One adapter. `limit` takes the first N images; `rank` sets its capacity.
+
+    Both are arguments rather than constants because the experiment sweeps
+    them, and a sweep that edits a module between runs cannot say afterwards
+    which value produced which weights.
+
+    The first N, not a random N: the folder order is the dataset order, so a
+    20-image run trains on a subset of what a 100-image run sees. A random
+    draw would make the two differ by which paintings as well as by how many.
+    """
+    paths = sorted(images.glob("*.png"))[:limit]
     if not paths:
         raise ValueError(f"no images in {images}")
+    if limit is not None and len(paths) < limit:
+        raise ValueError(f"{images} holds {len(paths)} images, {limit} asked for")
 
     torch.manual_seed(seed)
     device = _device()
@@ -148,8 +168,8 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
     unet = pipe.unet
     unet.add_adapter(
         LoraConfig(
-            r=RANK,
-            lora_alpha=RANK,
+            r=rank,
+            lora_alpha=rank,
             init_lora_weights="gaussian",
             target_modules=["to_k", "to_q", "to_v", "to_out.0"],
         )
@@ -244,8 +264,8 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
         if (step + 1) % report_every == 0:
             per_step = (time.perf_counter() - started) / (step + 1)
             print(
-                f"  {style} step {step + 1}/{steps}  loss {loss.item():.4f}  "
-                f"{per_step:.2f}s/step",
+                f"  {style} r{rank} n{len(paths)} step {step + 1}/{steps}  "
+                f"loss {loss.item():.4f}  {per_step:.2f}s/step",
                 flush=True,
             )
 
@@ -268,13 +288,18 @@ def main() -> None:
     parser.add_argument("--style", required=True)
     parser.add_argument("--steps", type=int, default=STEPS)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--rank", type=int, default=RANK)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
     saved = train(
         args.style,
         images=Path("data") / args.style,
-        out=Path("runs") / args.style,
+        out=args.out or Path("runs") / args.style,
         steps=args.steps,
         seed=args.seed,
+        rank=args.rank,
+        limit=args.limit,
     )
     print(f"saved {saved}")
 

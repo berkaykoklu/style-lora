@@ -17,7 +17,20 @@ from PIL import Image
 
 DATASET = "huggan/wikiart"
 STYLES = ("Baroque", "Art_Nouveau")
-PER_STYLE = 20
+
+# Fetched per style, then split.
+#
+# The last HOLDOUT images are never trained on. The style centre is built from
+# them instead, because a centre made of the training images rewards an adapter
+# for memorising them: reproduce one painting and you sit exactly on the target
+# without having learned a style at all. Held-out images make the target
+# something the adapter has never seen.
+#
+# The remaining TRAIN_POOL is what the data axis sweeps inside, so a 20-image
+# run trains on a subset of what a 100-image run sees.
+PER_STYLE = 130
+HOLDOUT = 30
+TRAIN_POOL = PER_STYLE - HOLDOUT
 
 # What sd-turbo was trained at. Feeding it another size means asking the model
 # to work at a scale it has never seen.
@@ -89,6 +102,17 @@ CAPTIONS_FILE = "captions.json"
 ROWS_URL = "https://datasets-server.huggingface.co/rows"
 TOTAL_ROWS = 11_320
 PAGE = 100
+
+
+def split(folder: Path) -> tuple[list[Path], list[Path]]:
+    """The training pool and the held-out images, in fetch order.
+
+    Positional, not random: the folder order is the dataset order, so every
+    run in the sweep sees the same paintings in the same order and two runs
+    differ by how many rather than by which.
+    """
+    paths = sorted(folder.glob("*.png"))
+    return paths[:TRAIN_POOL], paths[TRAIN_POOL:]
 
 
 def style_index(name: str) -> int:

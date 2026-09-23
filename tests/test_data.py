@@ -1,7 +1,18 @@
+from pathlib import Path
+
 import pytest
 from PIL import Image
 
-from stylelora.data import PER_STYLE, SIZE, STYLES, prepare, style_index
+from stylelora.data import (
+    HOLDOUT,
+    PER_STYLE,
+    SIZE,
+    STYLES,
+    TRAIN_POOL,
+    prepare,
+    split,
+    style_index,
+)
 
 
 def test_both_styles_have_a_label() -> None:
@@ -54,7 +65,26 @@ def test_preparing_returns_rgb_whatever_went_in() -> None:
 
 def test_the_plan_asks_for_the_same_count_from_both_styles() -> None:
     """Different counts would make the two LoRAs differ by more than style."""
-    assert PER_STYLE == 20
+    assert PER_STYLE == TRAIN_POOL + HOLDOUT
+
+
+def test_the_holdout_is_not_in_the_training_pool(tmp_path: Path) -> None:
+    """A style centre built from training images rewards memorisation, so the
+    images it is built from have to be ones no run was trained on."""
+    for i in range(PER_STYLE):
+        Image.new("RGB", (8, 8)).save(tmp_path / f"{i:03d}.png")
+
+    pool, holdout = split(tmp_path)
+
+    assert len(pool) == TRAIN_POOL
+    assert len(holdout) == HOLDOUT
+    assert not set(pool) & set(holdout)
+
+
+def test_the_largest_training_size_still_leaves_the_holdout_alone() -> None:
+    """The sweep trains on up to TRAIN_POOL images; one more would reach into
+    the images the score is measured against."""
+    assert TRAIN_POOL == 100
 
 
 def test_the_size_matches_what_the_base_model_was_trained_at() -> None:
