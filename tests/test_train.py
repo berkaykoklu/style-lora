@@ -57,3 +57,13 @@ def test_a_tiny_run_writes_weights(tmp_path: Path) -> None:
     out = train("Test", images=images, out=tmp_path / "lora", steps=2)
 
     assert out.exists()
+
+
+def test_half_precision_only_where_it_is_well_supported() -> None:
+    """MPS half precision is still patchy; that path stays in float32 and
+    relies on the memory cap instead."""
+    from stylelora.train import _dtype
+
+    assert _dtype("cuda").itemsize == 2
+    assert _dtype("mps").itemsize == 4
+    assert _dtype("cpu").itemsize == 4

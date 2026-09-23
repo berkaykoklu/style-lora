@@ -15,6 +15,7 @@ would put a second difference into a comparison designed to have exactly one.
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,7 @@ from diffusers import AutoPipelineForText2Image
 from peft import LoraConfig, get_peft_model_state_dict
 from PIL import Image
 
+from stylelora import budget
 from stylelora.data import SIZE
 
 BASE_MODEL = "stabilityai/sd-turbo"
@@ -39,17 +41,30 @@ CAPTION = "a painting"
 
 
 def _device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
-def _load_pixels(paths: list[Path], device: str) -> torch.Tensor:
+def _dtype(device: str) -> torch.dtype:
+    """Half precision where it is well supported, full precision elsewhere.
+
+    The frozen base weights do not need the range; the LoRA parameters being
+    trained do, and peft keeps those in float32 regardless. On MPS half
+    precision is still patchy, so that path stays in float32 and relies on the
+    memory cap instead.
+    """
+    return torch.float16 if device == "cuda" else torch.float32
+
+
+def _load_pixels(paths: list[Path], device: str, dtype: torch.dtype) -> torch.Tensor:
     """Images as a tensor in [-1, 1], which is the range the VAE expects."""
     arrays = [
         np.asarray(Image.open(p).convert("RGB").resize((SIZE, SIZE)), dtype=np.float32)
         for p in paths
     ]
     stacked = torch.from_numpy(np.stack(arrays))  # (n, H, W, 3)
-    return (stacked.permute(0, 3, 1, 2) / 127.5 - 1.0).to(device)
+    return (stacked.permute(0, 3, 1, 2) / 127.5 - 1.0).to(device=device, dtype=dtype)
 
 
 def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0) -> Path:
@@ -59,8 +74,13 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
 
     torch.manual_seed(seed)
     device = _device()
+    if device == "mps":
+        # Unified memory: without a ceiling the allocator will take the machine
+        # into swap, and swapping is the freeze. On CUDA the card has its own
+        # memory and the driver refuses cleanly, so no cap is needed.
+        budget.apply()
 
-    pipe = AutoPipelineForText2Image.from_pretrained(BASE_MODEL, torch_dtype=torch.float32)
+    pipe = AutoPipelineForText2Image.from_pretrained(BASE_MODEL, torch_dtype=_dtype(device))
     pipe.to(device)
     pipe.set_progress_bar_config(disable=True)
 
@@ -84,7 +104,7 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
     # The images and the caption never change, so they are encoded once rather
     # than on every step.
     with torch.no_grad():
-        pixels = _load_pixels(paths, device)
+        pixels = _load_pixels(paths, device, _dtype(device))
         latents = pipe.vae.encode(pixels).latent_dist.sample() * pipe.vae.config.scaling_factor
         tokens = pipe.tokenizer(
             [CAPTION] * len(paths),
@@ -101,27 +121,42 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
     pipe.text_encoder.to("cpu")
     if device == "mps":
         torch.mps.empty_cache()
+    elif device == "cuda":
+        torch.cuda.empty_cache()
 
     generator = torch.Generator(device="cpu").manual_seed(seed)
     horizon = pipe.scheduler.config.num_train_timesteps
+    # Ten progress lines per run whatever its length: a long run that prints
+    # nothing cannot be told apart from one that has hung.
+    report_every = max(steps // 10, 1)
+    started = time.perf_counter()
 
     for step in range(steps):
         i = int(torch.randint(0, len(latents), (1,), generator=generator).item())
         latent = latents[i : i + 1]
-        noise = torch.randn(latent.shape, generator=generator).to(device)
+        noise = torch.randn(latent.shape, generator=generator).to(
+            device=device, dtype=latent.dtype
+        )
         timestep = torch.randint(0, horizon, (1,), generator=generator).to(device)
 
         noisy = pipe.scheduler.add_noise(latent, noise, timestep)
         predicted = unet(noisy, timestep, encoder_hidden_states=embeds[i : i + 1]).sample
         # The whole of diffusion training: how wrong was the guess at the noise.
-        loss = torch.nn.functional.mse_loss(predicted, noise)
+        # Computed in float32: the squared error of half-precision tensors
+        # underflows long before the values themselves do.
+        loss = torch.nn.functional.mse_loss(predicted.float(), noise.float())
 
         optimiser.zero_grad()
         loss.backward()
         optimiser.step()
 
-        if step and step % 100 == 0:
-            print(f"  {style} step {step}/{steps}  loss {loss.item():.4f}", flush=True)
+        if (step + 1) % report_every == 0:
+            per_step = (time.perf_counter() - started) / (step + 1)
+            print(
+                f"  {style} step {step + 1}/{steps}  loss {loss.item():.4f}  "
+                f"{per_step:.2f}s/step",
+                flush=True,
+            )
 
     out.mkdir(parents=True, exist_ok=True)
     weights = out / "lora.pt"
