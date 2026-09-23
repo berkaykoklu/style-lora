@@ -81,6 +81,15 @@ Read the `s/step` figure and multiply by 500. If that is more than about twenty
 minutes, drop `--steps` rather than waiting — the number is worth knowing
 either way, and guessing at it is what filled a laptop's memory twice.
 
+Measured on a T4: **0.80 s/step**, so 500 steps is about seven minutes and
+both styles together are under fifteen.
+
+The loss will not fall. Each step samples a random noise level, and how hard
+the prediction is depends far more on that draw than on how well the model is
+doing, so the figure bounces between roughly 0.13 and 0.38 from the first step
+to the last. Diffusion training gives no progress signal in its loss; step
+seven is where you find out whether anything was learned.
+
 ## 6. Train both styles
 
 Identical settings for both. If step five made you lower `--steps`, pass the
