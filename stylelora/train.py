@@ -15,6 +15,7 @@ would put a second difference into a comparison designed to have exactly one.
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,7 @@ from peft import LoraConfig, get_peft_model_state_dict
 from PIL import Image
 
 from stylelora import budget
-from stylelora.data import SIZE
+from stylelora.data import CAPTIONS_FILE, SIZE
 
 BASE_MODEL = "stabilityai/sd-turbo"
 
@@ -37,9 +38,10 @@ RANK = 8
 LR = 1e-4
 STEPS = 500
 
-# A caption with no style word in it. The images carry the style; saying it
-# here as well would teach the model to wait for the word before applying it.
-CAPTION = "a painting"
+# Used only when an image has no recorded caption -- see data.py, which writes
+# one per image naming its subject. A single shared caption was the first
+# design and it left the adapter carrying the content as well as the style.
+FALLBACK_CAPTION = "a painting"
 
 # How many images go through the VAE at once. Two fits comfortably; twenty in
 # one pass filled a 15 GB card before the first training step.
@@ -91,6 +93,19 @@ def _load_pixels(paths: list[Path], device: str, dtype: torch.dtype) -> torch.Te
     ]
     stacked = torch.from_numpy(np.stack(arrays))  # (n, H, W, 3)
     return (stacked.permute(0, 3, 1, 2) / 127.5 - 1.0).to(device=device, dtype=dtype)
+
+
+def _captions_for(paths: list[Path], folder: Path) -> list[str]:
+    """The subject of each image, in the same order as the images.
+
+    Missing entries fall back rather than failing: a caption file written by an
+    older fetch is worth less than no run at all.
+    """
+    recorded: dict[str, str] = {}
+    captions_path = folder / CAPTIONS_FILE
+    if captions_path.exists():
+        recorded = json.loads(captions_path.read_text())
+    return [recorded.get(p.name, FALLBACK_CAPTION) for p in paths]
 
 
 def training_scheduler() -> Any:
@@ -161,10 +176,12 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
         latents = torch.cat(chunks) * pipe.vae.config.scaling_factor
         del chunks
 
-        # One caption, encoded once. Every image trains against the same text,
-        # so twenty copies of it would be twenty copies of one answer.
+        # One caption per image, naming its subject. The caption carries the
+        # content so the adapter is left with the style, which is the only
+        # thing the two runs are meant to differ by.
+        captions = _captions_for(paths, images)
         tokens = pipe.tokenizer(
-            [CAPTION],
+            captions,
             padding="max_length",
             max_length=pipe.tokenizer.model_max_length,
             truncation=True,
@@ -212,7 +229,7 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
         ).to(device)
 
         noisy = noise_scheduler.add_noise(latent, noise, timestep)
-        predicted = unet(noisy, timestep, encoder_hidden_states=embeds).sample
+        predicted = unet(noisy, timestep, encoder_hidden_states=embeds[i : i + 1]).sample
         # The whole of diffusion training: how wrong was the guess at the noise.
         # Computed in float32: the squared error of half-precision tensors
         # underflows long before the values themselves do.

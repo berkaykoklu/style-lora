@@ -59,3 +59,26 @@ def test_the_plan_asks_for_the_same_count_from_both_styles() -> None:
 
 def test_the_size_matches_what_the_base_model_was_trained_at() -> None:
     assert SIZE == 512
+
+
+def test_every_genre_has_a_caption() -> None:
+    """A genre with no caption would silently fall back, and that image would
+    train against text that says nothing about it."""
+    from stylelora.data import GENRE_CAPTIONS, GENRE_NAMES
+
+    for name in GENRE_NAMES:
+        assert name in GENRE_CAPTIONS
+
+
+def test_an_out_of_range_genre_falls_back_rather_than_failing() -> None:
+    from stylelora.data import caption_for
+
+    assert caption_for(999) == "a painting"
+    assert caption_for(-1) == "a painting"
+
+
+def test_a_known_genre_names_its_subject() -> None:
+    from stylelora.data import GENRE_NAMES, caption_for
+
+    assert caption_for(GENRE_NAMES.index("portrait")) == "a portrait"
+    assert caption_for(GENRE_NAMES.index("landscape")) == "a landscape"

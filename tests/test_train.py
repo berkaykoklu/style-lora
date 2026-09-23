@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from stylelora.train import BASE_MODEL, CAPTION, LR, RANK, STEPS, train
+from stylelora.train import BASE_MODEL, FALLBACK_CAPTION, LR, RANK, STEPS, train
 
 
 def test_the_base_model_is_the_cached_one() -> None:
@@ -18,11 +18,23 @@ def test_the_rank_is_small_enough_to_be_a_style_adapter() -> None:
     assert RANK <= 16
 
 
-def test_the_caption_names_no_style() -> None:
-    """The images carry the style. Saying it in the caption as well would teach
-    the model to wait for the word before applying it."""
-    for word in ("baroque", "nouveau", "style"):
-        assert word not in CAPTION.lower()
+def test_no_caption_names_a_style() -> None:
+    """Captions say what is in the picture, never how it is painted. A caption
+    that named the style would teach the model to wait for the word."""
+    from stylelora.data import GENRE_CAPTIONS
+
+    for caption in (*GENRE_CAPTIONS.values(), FALLBACK_CAPTION):
+        lowered = caption.lower()
+        for word in ("baroque", "nouveau", "style", "ornate", "dramatic"):
+            assert word not in lowered, f"{caption!r} contains {word!r}"
+
+
+def test_captions_differ_between_subjects() -> None:
+    """One caption for every image left the adapter carrying the content as
+    well as the style, and both styles learned the same thing."""
+    from stylelora.data import GENRE_CAPTIONS
+
+    assert len(set(GENRE_CAPTIONS.values())) > 5
 
 
 def test_both_styles_would_get_the_same_settings() -> None:

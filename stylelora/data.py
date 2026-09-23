@@ -54,6 +54,38 @@ STYLE_NAMES = (
     "Ukiyo_e",
 )
 
+# WikiArt's genre column, turned into captions that say what is in the
+# picture and nothing about how it is painted.
+#
+# One caption for every image was the first design, and it was wrong: with the
+# same text on all twenty, the adapter had to carry the content as well as the
+# style, and what both styles ended up sharing -- "a painting, not a
+# photograph" -- was the only signal strong enough to survive. The two
+# adapters became indistinguishable from each other.
+#
+# A caption that names the subject leaves the adapter only the style to learn.
+GENRE_CAPTIONS = {
+    "abstract_painting": "an abstract composition",
+    "cityscape": "a view of a city",
+    "genre_painting": "a scene of everyday life",
+    "illustration": "an illustration",
+    "landscape": "a landscape",
+    "nude_painting": "a nude figure",
+    "portrait": "a portrait",
+    "religious_painting": "a religious scene",
+    "sketch_and_study": "a study of a figure",
+    "still_life": "a still life",
+    "Unknown Genre": "a painting",
+}
+
+GENRE_NAMES = (
+    "abstract_painting", "cityscape", "genre_painting", "illustration",
+    "landscape", "nude_painting", "portrait", "religious_painting",
+    "sketch_and_study", "still_life", "Unknown Genre",
+)
+
+CAPTIONS_FILE = "captions.json"
+
 ROWS_URL = "https://datasets-server.huggingface.co/rows"
 TOTAL_ROWS = 11_320
 PAGE = 100
@@ -80,8 +112,15 @@ def prepare(image: Image.Image, size: int = SIZE) -> Image.Image:
     return square.resize((size, size), Image.Resampling.LANCZOS)
 
 
+def caption_for(genre: int) -> str:
+    """What is in the picture, said without naming how it is painted."""
+    if not 0 <= genre < len(GENRE_NAMES):
+        return GENRE_CAPTIONS["Unknown Genre"]
+    return GENRE_CAPTIONS[GENRE_NAMES[genre]]
+
+
 def fetch(style: str, count: int = PER_STYLE, out: Path | None = None) -> list[Path]:
-    """Download `count` images of one style and write them as PNGs.
+    """Download `count` images of one style, write them, and note their subjects.
 
     The rows endpoint rate-limits under load and clears on its own, so a failed
     page waits and retries rather than aborting a run that is most of the way
@@ -92,6 +131,7 @@ def fetch(style: str, count: int = PER_STYLE, out: Path | None = None) -> list[P
     folder.mkdir(parents=True, exist_ok=True)
 
     saved: list[Path] = []
+    captions: dict[str, str] = {}
     offset = 0
     while len(saved) < count and offset < TOTAL_ROWS:
         url = (
@@ -112,6 +152,9 @@ def fetch(style: str, count: int = PER_STYLE, out: Path | None = None) -> list[P
                 continue
             path = folder / f"{len(saved):02d}.png"
             prepare(Image.open(io.BytesIO(raw))).save(path)
+            captions[path.name] = caption_for(row["row"]["genre"])
             saved.append(path)
         offset += PAGE
+
+    (folder / CAPTIONS_FILE).write_text(json.dumps(captions, indent=2))
     return saved
