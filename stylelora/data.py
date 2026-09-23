@@ -28,6 +28,11 @@ STYLES = ("Baroque", "Art_Nouveau")
 #
 # The remaining TRAIN_POOL is what the data axis sweeps inside, so a 20-image
 # run trains on a subset of what a 100-image run sees.
+#
+# The ceiling is Baroque's 466 rows (Art Nouveau has 760, Impressionism 3345 --
+# this is an 11,320-row subset of WikiArt, not the whole of it). Raising
+# PER_STYLE past 466 would leave the two styles with different counts, which is
+# the one thing the comparison is built to avoid.
 PER_STYLE = 130
 HOLDOUT = 30
 TRAIN_POOL = PER_STYLE - HOLDOUT
