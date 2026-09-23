@@ -48,14 +48,6 @@ ENCODE_BATCH = 2
 # the saver, which is exactly how the adapter came to be silently ignored.
 WEIGHTS_NAME = "pytorch_lora_weights.safetensors"
 
-# How many images go through the VAE at once. Two fits comfortably; twenty in
-# one pass filled a 15 GB card before the first training step.
-ENCODE_BATCH = 2
-
-# What save_lora_weights writes. Named here so the loader cannot drift from
-# the saver, which is exactly how the adapter came to be silently ignored.
-WEIGHTS_NAME = "pytorch_lora_weights.safetensors"
-
 
 def _device() -> str:
     if torch.cuda.is_available():
