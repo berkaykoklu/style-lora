@@ -43,6 +43,10 @@ CAPTION = "a painting"
 # one pass filled a 15 GB card before the first training step.
 ENCODE_BATCH = 2
 
+# How many images go through the VAE at once. Two fits comfortably; twenty in
+# one pass filled a 15 GB card before the first training step.
+ENCODE_BATCH = 2
+
 
 def _device() -> str:
     if torch.cuda.is_available():

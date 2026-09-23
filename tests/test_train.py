@@ -104,3 +104,12 @@ def test_the_error_names_the_step_it_failed_on() -> None:
 
     with pytest.raises(RuntimeError, match="step 17"):
         check_finite(torch.tensor(float("nan")), step=17)
+
+
+def test_images_are_encoded_in_chunks_not_all_at_once() -> None:
+    """Twenty images through the VAE in one pass filled a 15 GB card before
+    the first training step, for a loop that uses one image at a time."""
+    from stylelora.data import PER_STYLE
+    from stylelora.train import ENCODE_BATCH
+
+    assert ENCODE_BATCH < PER_STYLE
