@@ -3,7 +3,17 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from stylelora.experiment import SIGMAS, Cell, content_tolerance, knee, lift, measure
+from stylelora.experiment import (
+    SIGMAS,
+    Cell,
+    Lift,
+    content_tolerance,
+    knee,
+    lift,
+    measure,
+    operating_point,
+    separation,
+)
 from stylelora.score import embed_images, style_centre
 
 Images = list[Image.Image]
@@ -211,3 +221,53 @@ def test_a_cell_with_no_seeds_is_refused() -> None:
 
     with pytest.raises(ValueError):
         measure(None, 0.5, centre, centre, ("a",), lambda *_: [], seeds=())
+
+
+# --- separation and the operating point -------------------------------------
+
+
+def test_two_adapters_producing_the_same_images_are_not_separated() -> None:
+    """The arithmetic the sum exists for: measured from opposite sides, one
+    lift is the exact negative of the other, however large each looks."""
+    mirrored = separation(Lift(mean=-0.042, spread=0.01), Lift(mean=+0.043, spread=0.01))
+
+    assert mirrored.mean == pytest.approx(0.001)
+    assert not mirrored.real
+
+
+def test_two_adapters_moving_to_their_own_styles_are_separated() -> None:
+    both = separation(Lift(mean=+0.014, spread=0.004), Lift(mean=+0.005, spread=0.004))
+
+    assert both.mean == pytest.approx(0.019)
+    assert both.real
+
+
+def test_the_operating_point_is_the_best_separation_the_content_survives() -> None:
+    measured = [
+        (0.2, Lift(0.009, 0.003)),
+        (0.4, Lift(0.019, 0.003)),
+        (0.6, Lift(0.023, 0.003)),
+        (1.0, Lift(0.001, 0.003)),
+    ]
+
+    assert operating_point(measured, content_knee=0.6) == 0.6
+
+
+def test_a_peak_the_content_cannot_reach_is_not_offered() -> None:
+    """The measured Art Nouveau shape: separation still climbing at 1.0 while
+    the prompt score has already broken."""
+    measured = [(0.4, Lift(0.019, 0.003)), (0.8, Lift(0.030, 0.003)), (1.0, Lift(0.040, 0.003))]
+
+    assert operating_point(measured, content_knee=0.8) == 0.8
+
+
+def test_a_separation_that_decays_before_the_knee_moves_the_point_down() -> None:
+    """The measured Baroque shape: the knee allows 0.6, but the styles are
+    furthest apart at 0.4 and quoting 0.6 would cost quality for no style."""
+    measured = [(0.2, Lift(0.009, 0.003)), (0.4, Lift(0.019, 0.003)), (0.6, Lift(0.002, 0.003))]
+
+    assert operating_point(measured, content_knee=0.6) == 0.4
+
+
+def test_an_adapter_whose_content_never_survives_has_no_operating_point() -> None:
+    assert operating_point([(0.2, Lift(0.009, 0.003))], content_knee=None) is None

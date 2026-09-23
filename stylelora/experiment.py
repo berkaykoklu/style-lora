@@ -182,6 +182,50 @@ def knee(cells: Sequence[Cell], tolerance: float) -> float | None:
     return found
 
 
+def separation(a: Lift, b: Lift) -> Lift:
+    """How far apart the two adapters are, which is what neither lift can say
+    alone.
+
+    Both adapters drift towards the same place as strength rises -- the point
+    the base model collapses to -- and that place is not equidistant from the
+    two styles. Whichever style it happens to sit nearer gets credited with a
+    rising lift for going nowhere of its own, and the other is debited for the
+    same journey.
+
+    Adding the two lifts cancels it. If both adapters produced identical images
+    then one lift is the exact negative of the other, whatever the images look
+    like, and the sum is zero. So the sum measures only what the two adapters do
+    *differently*, which is the thing the project set out to find.
+
+    Measured at strength 1.0 the sum is 0.001 -- the two adapters are the same
+    adapter by then -- while each lift on its own reads +-0.04.
+    """
+    return Lift(mean=a.mean + b.mean, spread=float(np.hypot(a.spread, b.spread)))
+
+
+def operating_point(
+    separations: Sequence[tuple[float, Lift]],
+    content_knee: float | None,
+) -> float | None:
+    """The strength to actually ship: the best separation the content survives.
+
+    Two limits, and they are not the same limit. The knee says how far the
+    prompt holds; the separation peak says where the styles are furthest apart.
+    For one of the two styles measured here they land in different places --
+    the knee allows 0.6 while the separation has already decayed by then -- and
+    quoting the knee alone would recommend a setting that costs image quality
+    for no style at all.
+    """
+    usable = [
+        (result.mean, strength)
+        for strength, result in separations
+        if content_knee is not None and strength <= content_knee
+    ]
+    if not usable:
+        return None
+    return max(usable)[1]
+
+
 def content_tolerance(base: Cell, sigmas: float = SIGMAS) -> float:
     """How far the prompt score may drop before the drop means anything.
 
