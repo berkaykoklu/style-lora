@@ -20,7 +20,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from diffusers import AutoPipelineForText2Image
+from diffusers import AutoPipelineForText2Image, StableDiffusionPipeline
+from diffusers.utils.state_dict_utils import convert_state_dict_to_diffusers
 from peft import LoraConfig, get_peft_model_state_dict
 from PIL import Image
 
@@ -43,9 +44,17 @@ CAPTION = "a painting"
 # one pass filled a 15 GB card before the first training step.
 ENCODE_BATCH = 2
 
+# What save_lora_weights writes. Named here so the loader cannot drift from
+# the saver, which is exactly how the adapter came to be silently ignored.
+WEIGHTS_NAME = "pytorch_lora_weights.safetensors"
+
 # How many images go through the VAE at once. Two fits comfortably; twenty in
 # one pass filled a 15 GB card before the first training step.
 ENCODE_BATCH = 2
+
+# What save_lora_weights writes. Named here so the loader cannot drift from
+# the saver, which is exactly how the adapter came to be silently ignored.
+WEIGHTS_NAME = "pytorch_lora_weights.safetensors"
 
 
 def _device() -> str:
@@ -196,9 +205,17 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
             )
 
     out.mkdir(parents=True, exist_ok=True)
-    weights = out / "lora.pt"
-    torch.save(get_peft_model_state_dict(unet), weights)
-    return weights
+    # Saved through the library's own helper rather than torch.save.
+    # get_peft_model_state_dict names its keys peft's way; load_lora_weights
+    # looks for diffusers' way, finds nothing, warns, and carries on with the
+    # base model -- so the first version of this trained correctly, saved
+    # correctly, and loaded nothing at all.
+    StableDiffusionPipeline.save_lora_weights(
+        save_directory=str(out),
+        unet_lora_layers=convert_state_dict_to_diffusers(get_peft_model_state_dict(unet)),
+        safe_serialization=True,
+    )
+    return out / WEIGHTS_NAME
 
 
 def main() -> None:

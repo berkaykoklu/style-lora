@@ -15,7 +15,8 @@ import torch
 from diffusers import AutoPipelineForText2Image
 from PIL import Image
 
-from stylelora.train import BASE_MODEL, _device, _dtype
+from stylelora import budget
+from stylelora.train import BASE_MODEL, WEIGHTS_NAME, _device, _dtype
 
 # Subjects only. No style word appears here -- test_generate.py fails if one
 # creeps in, because a prompt that names the style would let the base model
@@ -49,6 +50,8 @@ def _base_pipe() -> Any:
     runtime; the auto class is a factory, not the type it returns.
     """
     device = _device()
+    if device == "mps":
+        budget.apply()
     pipe = AutoPipelineForText2Image.from_pretrained(BASE_MODEL, torch_dtype=_dtype(device))
     pipe.to(device)
     pipe.set_progress_bar_config(disable=True)
@@ -73,6 +76,11 @@ def generate(
     if applied:
         assert lora is not None
         pipe.load_lora_weights(str(lora.parent), weight_name=lora.name)
+        if not pipe.get_list_adapters().get("unet"):
+            raise RuntimeError(
+                f"{lora} loaded no adapter into the unet; "
+                f"expected a file named {WEIGHTS_NAME}"
+            )
         pipe.fuse_lora(lora_scale=strength)
 
     try:

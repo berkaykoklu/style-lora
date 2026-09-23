@@ -32,3 +32,11 @@ def test_the_sampler_settings_match_a_distilled_model() -> None:
     either makes its output worse, not better."""
     assert STEPS <= 4
     assert GUIDANCE == 0.0
+
+
+def test_the_loader_and_the_saver_agree_on_the_file_name() -> None:
+    """They drifted once: training saved peft's key names, loading looked for
+    diffusers' names, found none, warned, and used the base model instead."""
+    from stylelora.train import WEIGHTS_NAME
+
+    assert WEIGHTS_NAME.endswith(".safetensors")
