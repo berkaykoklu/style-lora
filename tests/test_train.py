@@ -59,11 +59,48 @@ def test_a_tiny_run_writes_weights(tmp_path: Path) -> None:
     assert out.exists()
 
 
-def test_half_precision_only_where_it_is_well_supported() -> None:
-    """MPS half precision is still patchy; that path stays in float32 and
-    relies on the memory cap instead."""
+def test_training_runs_in_full_precision_on_every_device() -> None:
+    """Half precision gave a loss of nan from the first step on a T4: the VAE
+    overflows float16's range and every weight after that is ruined."""
     from stylelora.train import _dtype
 
-    assert _dtype("cuda").itemsize == 2
-    assert _dtype("mps").itemsize == 4
-    assert _dtype("cpu").itemsize == 4
+    for device in ("cuda", "mps", "cpu"):
+        assert _dtype(device).itemsize == 4
+
+
+def test_a_finite_loss_passes_through() -> None:
+    import torch
+
+    from stylelora.train import check_finite
+
+    check_finite(torch.tensor(0.42), step=3)
+
+
+def test_a_nan_loss_stops_the_run() -> None:
+    """Half precision produced exactly this, and the run still reported success."""
+    import torch
+
+    from stylelora.train import check_finite
+
+    with pytest.raises(RuntimeError, match="not usable"):
+        check_finite(torch.tensor(float("nan")), step=3)
+
+
+def test_an_infinite_loss_stops_the_run() -> None:
+    """inf is what nan comes from; catching only nan would let the step that
+    created it through."""
+    import torch
+
+    from stylelora.train import check_finite
+
+    with pytest.raises(RuntimeError):
+        check_finite(torch.tensor(float("inf")), step=0)
+
+
+def test_the_error_names_the_step_it_failed_on() -> None:
+    import torch
+
+    from stylelora.train import check_finite
+
+    with pytest.raises(RuntimeError, match="step 17"):
+        check_finite(torch.tensor(float("nan")), step=17)

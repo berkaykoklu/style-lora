@@ -47,14 +47,19 @@ def _device() -> str:
 
 
 def _dtype(device: str) -> torch.dtype:
-    """Half precision where it is well supported, full precision elsewhere.
+    """Full precision, everywhere.
 
-    The frozen base weights do not need the range; the LoRA parameters being
-    trained do, and peft keeps those in float32 regardless. On MPS half
-    precision is still patchy, so that path stays in float32 and relies on the
-    memory cap instead.
+    Half precision was tried first, to halve the model's footprint. On a T4 it
+    produced a loss of nan from the first step: Stable Diffusion's VAE is known
+    to overflow float16's range, and once a value reaches inf the gradient that
+    follows is nan and every weight after it is ruined.
+
+    The footprint was only ever a problem on a 16 GB laptop, and that path has
+    a memory cap for it. A rented GPU has room, so nothing is bought by
+    risking the arithmetic.
     """
-    return torch.float16 if device == "cuda" else torch.float32
+    del device  # kept in the signature: the choice is device-shaped by nature
+    return torch.float32
 
 
 def _load_pixels(paths: list[Path], device: str, dtype: torch.dtype) -> torch.Tensor:
@@ -65,6 +70,17 @@ def _load_pixels(paths: list[Path], device: str, dtype: torch.dtype) -> torch.Te
     ]
     stacked = torch.from_numpy(np.stack(arrays))  # (n, H, W, 3)
     return (stacked.permute(0, 3, 1, 2) / 127.5 - 1.0).to(device=device, dtype=dtype)
+
+
+def check_finite(loss: torch.Tensor, step: int) -> None:
+    """Stop the moment the loss stops being a number.
+
+    A run that produces nan still finishes, still prints its progress and still
+    writes a file. Every measurement taken from those weights afterwards would
+    be measuring nothing, and nothing in the output would say so.
+    """
+    if not torch.isfinite(loss):
+        raise RuntimeError(f"loss became {loss.item()} at step {step}; weights are not usable")
 
 
 def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0) -> Path:
@@ -145,6 +161,8 @@ def train(style: str, images: Path, out: Path, steps: int = STEPS, seed: int = 0
         # Computed in float32: the squared error of half-precision tensors
         # underflows long before the values themselves do.
         loss = torch.nn.functional.mse_loss(predicted.float(), noise.float())
+
+        check_finite(loss, step)
 
         optimiser.zero_grad()
         loss.backward()
