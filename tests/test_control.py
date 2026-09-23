@@ -37,15 +37,24 @@ def test_soften_removes_detail() -> None:
     assert np.abs(np.diff(after, axis=1)).mean() < np.abs(np.diff(before, axis=1)).mean()
 
 
-def test_controls_know_nothing_about_the_training_images() -> None:
-    """The point of a control is that it cannot have learned the style: these
-    take one image and return one image, with no style anywhere in reach."""
+def test_controls_cannot_have_learned_anything() -> None:
+    """The point of a control is that it has nothing to learn from.
+
+    Each takes one image and returns one image, with no other argument to pass
+    training data through, and gives the same answer every time. An earlier
+    version of this test scanned the source for the word "style" and failed on
+    a docstring, which tested the prose rather than the property.
+    """
     import inspect
 
-    from stylelora import control
+    from stylelora.control import CONTROLS
 
-    assert "style" not in inspect.getsource(control.sepia)
-    assert "style" not in inspect.getsource(control.darken)
+    original = _photo()
+    for name, transform in CONTROLS.items():
+        assert len(inspect.signature(transform).parameters) == 1, name
+        first = np.asarray(transform(original))
+        second = np.asarray(transform(original))
+        assert np.array_equal(first, second), name
 
 
 def test_an_unknown_control_is_refused() -> None:
