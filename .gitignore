@@ -13,3 +13,4 @@ node_modules/
 
 # Build notes stay local; the repository publishes the project, not how it was made.
 docs/superpowers/
+style-lora-results/

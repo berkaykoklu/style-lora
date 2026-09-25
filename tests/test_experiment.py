@@ -13,6 +13,7 @@ from stylelora.experiment import (
     measure,
     operating_point,
     separation,
+    separation_from_cells,
 )
 from stylelora.score import embed_images, style_centre
 
@@ -271,3 +272,32 @@ def test_a_separation_that_decays_before_the_knee_moves_the_point_down() -> None
 
 def test_an_adapter_whose_content_never_survives_has_no_operating_point() -> None:
     assert operating_point([(0.2, Lift(0.009, 0.003))], content_knee=None) is None
+
+
+def test_separation_needs_no_base_model() -> None:
+    """The two base gaps cancel, so the sum of the raw gaps is already the
+    separation -- which is how a lost notebook session stops being fatal."""
+    baroque = _gapped(0.4, (-0.020, -0.018))
+    nouveau = _gapped(0.4, (+0.033, +0.031))
+
+    without_base = separation_from_cells(baroque, nouveau)
+
+    # the long way round, through a base model that leans one way by 0.010
+    base_b = _gapped(0.0, (-0.010, -0.010))
+    base_n = _gapped(0.0, (+0.010, +0.010))
+    with_base = separation(lift(baroque, base_b), lift(nouveau, base_n))
+
+    assert without_base.mean == pytest.approx(with_base.mean)
+
+
+def test_separation_from_cells_refuses_mismatched_strengths() -> None:
+    with pytest.raises(ValueError):
+        separation_from_cells(_gapped(0.4, (0.01,)), _gapped(0.6, (0.01,)))
+
+
+def test_separation_from_cells_refuses_mismatched_seeds() -> None:
+    a = Cell(0.4, (0, 1), (0.7, 0.7), (0.6, 0.6), (0.3, 0.3))
+    b = Cell(0.4, (0, 2), (0.7, 0.7), (0.6, 0.6), (0.3, 0.3))
+
+    with pytest.raises(ValueError):
+        separation_from_cells(a, b)

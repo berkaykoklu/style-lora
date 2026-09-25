@@ -203,6 +203,29 @@ def separation(a: Lift, b: Lift) -> Lift:
     return Lift(mean=a.mean + b.mean, spread=float(np.hypot(a.spread, b.spread)))
 
 
+def separation_from_cells(a: Cell, b: Cell) -> Lift:
+    """Separation computed from the two cells alone, with no base model.
+
+    The sum of the two lifts subtracts both base gaps, and those two are exact
+    negatives of each other: the same base images, the same seeds, the two
+    centres swapped. They cancel, so the separation is just the two gaps added.
+
+    Which is what makes an analysis survive a lost session. The measured cells
+    are written to disk as they are computed; the base cells live only in the
+    notebook's memory, and a dropped Colab connection takes them with it. This
+    needs neither a GPU nor the base model to recover every separation number.
+
+    Paired by seed, so the spread is the spread of the difference rather than
+    the two spreads added.
+    """
+    if a.seeds != b.seeds:
+        raise ValueError(f"paired against different seeds: {a.seeds} against {b.seeds}")
+    if a.strength != b.strength:
+        raise ValueError(f"different strengths: {a.strength} and {b.strength}")
+    total = a.gaps + b.gaps
+    return Lift(mean=float(total.mean()), spread=float(total.std()))
+
+
 def operating_point(
     separations: Sequence[tuple[float, Lift]],
     content_knee: float | None,
