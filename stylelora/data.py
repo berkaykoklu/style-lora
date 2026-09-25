@@ -220,7 +220,39 @@ def contact_sheet(folder: Path, thumb: int = 200, cols: int = 5) -> Image.Image:
     return sheet
 
 
-def fetch(style: str, count: int = PER_STYLE, out: Path | None = None) -> list[Path]:
+def scan() -> list[Row]:
+    """Every row's metadata, no images.
+
+    Choosing well means choosing over the whole style rather than over
+    whatever came first, so the list has to exist before anything is picked.
+    It is metadata only -- a hundred small requests and not one painting.
+
+    Returned rather than fetched per style, because comparing five styles
+    would otherwise walk the dataset five times.
+    """
+    rows: list[Row] = []
+    offset = 0
+    while offset < TOTAL_ROWS:
+        url = (
+            f"{ROWS_URL}?dataset=huggan%2Fwikiart&config=default&split=train"
+            f"&offset={offset}&length={PAGE}"
+        )
+        try:
+            page = json.loads(urllib.request.urlopen(url, timeout=60).read())["rows"]
+        except Exception:  # noqa: BLE001 -- a rate limit should pause, not abort
+            time.sleep(5)
+            continue
+        rows.extend(row["row"] for row in page)
+        offset += PAGE
+    return rows
+
+
+def fetch(
+    style: str,
+    count: int = PER_STYLE,
+    out: Path | None = None,
+    rows: list[Row] | None = None,
+) -> list[Path]:
     """Download `count` images of one style, write them, and note their subjects.
 
     Every matching row is listed first and the choice made over the whole set --
@@ -235,23 +267,7 @@ def fetch(style: str, count: int = PER_STYLE, out: Path | None = None) -> list[P
     folder = out or Path("data") / style
     folder.mkdir(parents=True, exist_ok=True)
 
-    # Scan first, choose second, download third. The scan is metadata only, so
-    # listing every row of a style costs a hundred small requests and no images.
-    matching: list[Row] = []
-    offset = 0
-    while offset < TOTAL_ROWS:
-        url = (
-            f"{ROWS_URL}?dataset=huggan%2Fwikiart&config=default&split=train"
-            f"&offset={offset}&length={PAGE}"
-        )
-        try:
-            rows = json.loads(urllib.request.urlopen(url, timeout=60).read())["rows"]
-        except Exception:  # noqa: BLE001 -- a rate limit should pause, not abort
-            time.sleep(5)
-            continue
-        matching.extend(row["row"] for row in rows if row["row"]["style"] == wanted)
-        offset += PAGE
-
+    matching = [row for row in (rows if rows is not None else scan()) if row["style"] == wanted]
     saved: list[Path] = []
     captions: dict[str, str] = {}
     for row in choose(matching, count):
@@ -284,11 +300,15 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("data"))
     args = parser.parse_args()
 
+    rows = None
     for style in args.styles:
         folder = args.out / style
         have = sorted(folder.glob("*.png"))
         if len(have) < args.count:
-            have = fetch(style, count=args.count, out=folder)
+            if rows is None:
+                print(f"scanning {TOTAL_ROWS} rows once...", flush=True)
+                rows = scan()
+            have = fetch(style, count=args.count, out=folder, rows=rows)
         sheet = folder.parent / f"{style}.jpg"
         contact_sheet(folder).save(sheet, quality=88)
         print(f"{style:24} {len(have):>3} images -> {sheet}")
