@@ -25,6 +25,8 @@ packages = ["stylelora"]
 
 [tool.ruff]
 line-length = 100
+# Reference material, kept for comparison and not held to this project's rules.
+extend-exclude = ["stable-diffusion-1-5-lora-fine-tuning.ipynb"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

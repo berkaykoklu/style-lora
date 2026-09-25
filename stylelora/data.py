@@ -40,10 +40,6 @@ STYLES = ("Baroque", "Art_Nouveau")
 PER_STYLE = 130
 HOLDOUT = 30
 
-# No artist may supply more than 1/ARTIST_SHARE of a style's training set.
-# Eight is loose enough that a style dominated by two or three painters still
-# fills up, and tight enough that no single one of them defines it.
-ARTIST_SHARE = 8
 TRAIN_POOL = PER_STYLE - HOLDOUT
 
 # What sd-turbo was trained at. Feeding it another size means asking the model
@@ -117,6 +113,11 @@ Row = dict[str, Any]
 
 CAPTIONS_FILE = "captions.json"
 
+# The scan is a hundred sequential requests and takes about ten minutes, while
+# what it returns never changes. Kept next to the images rather than in a temp
+# directory so a Colab runtime that mounts Drive keeps it too.
+SCAN_CACHE = Path("data") / "rows.json"
+
 ROWS_URL = "https://datasets-server.huggingface.co/rows"
 TOTAL_ROWS = 11_320
 PAGE = 100
@@ -164,40 +165,61 @@ def caption_for(genre: int) -> str:
 def choose(rows: list[Row], count: int, seed: int = 0) -> list[Row]:
     """Which of a style's rows to train on.
 
-    Three rules, each answering something the first version of this got wrong.
-
     **Shuffled, not the first N.** WikiArt is ordered by artist, so taking rows
     in order took one artist's body of work: twenty "Baroque" images that were
     twenty Rembrandts. Shuffling with a fixed seed keeps the nesting -- the
-    first 20 of a shuffle are a subset of the first 100 -- while sampling across
+    first 20 of a shuffle are a subset of the first 100 -- while drawing from
     the whole style.
 
-    **Capped per artist.** Shuffling alone only fixes where in the list we look.
-    If one painter is sixty percent of a style's rows he is still sixty percent
-    of the sample, and the adapter learns him rather than the style. No artist
-    may supply more than an eighth of the set.
+    **Round-robin across artists, not a cap.** A cap was the first design and it
+    refused more than it fixed: at twenty images a one-eighth cap needs eight
+    painters, and only two of this dataset's sixteen styles have that many.
+    Taking one from each artist in turn spreads the set as evenly as the style
+    allows and never fails -- a style by a single painter still returns a full
+    set, and `concentration` is what says so.
 
     **No sketches.** Half the Rembrandts were pen studies and etchings on cream
-    paper, which teach line and paper, not a painted style. WikiArt labels them
-    in its genre column, so they can be dropped by name instead of by eye.
+    paper, which teach line and paper rather than a painted style. WikiArt
+    labels them in its genre column, so they go by name instead of by eye.
     """
     sketch = GENRE_NAMES.index("sketch_and_study")
-    paintings = [row for row in rows if row["genre"] != sketch]
-
-    shuffled = list(paintings)
+    shuffled = [row for row in rows if row["genre"] != sketch]
     random.Random(seed).shuffle(shuffled)
 
-    cap = max(count // ARTIST_SHARE, 1)
-    taken: list[Row] = []
-    per_artist: Counter[int] = Counter()
+    queues: dict[int, list[Row]] = {}
     for row in shuffled:
-        if len(taken) >= count:
+        queues.setdefault(row["artist"], []).append(row)
+
+    taken: list[Row] = []
+    while len(taken) < count:
+        served = False
+        for queue in queues.values():
+            if len(taken) >= count:
+                break
+            if queue:
+                taken.append(queue.pop(0))
+                served = True
+        if not served:  # every artist exhausted
             break
-        if per_artist[row["artist"]] >= cap:
-            continue
-        per_artist[row["artist"]] += 1
-        taken.append(row)
     return taken
+
+
+def concentration(rows: list[Row]) -> float:
+    """The largest share any one artist holds.
+
+    A style is only a style if more than one hand made it. At 1.0 the adapter
+    would learn a painter, and the label on the result would be wrong in a way
+    no separation gate can see -- the first run of this project trained on 466
+    Rembrandts labelled "Baroque".
+    """
+    if not rows:
+        raise ValueError("no rows to measure")
+    counts = Counter(row["artist"] for row in rows)
+    return counts.most_common(1)[0][1] / len(rows)
+
+
+# Above this, the set is one painter wearing a style's name.
+CONCENTRATION_LIMIT = 0.5
 
 
 def contact_sheet(folder: Path, thumb: int = 200, cols: int = 5) -> Image.Image:
@@ -230,6 +252,10 @@ def scan() -> list[Row]:
     Returned rather than fetched per style, because comparing five styles
     would otherwise walk the dataset five times.
     """
+    if SCAN_CACHE.exists():
+        cached: list[Row] = json.loads(SCAN_CACHE.read_text())
+        return cached
+
     rows: list[Row] = []
     offset = 0
     while offset < TOTAL_ROWS:
@@ -244,6 +270,9 @@ def scan() -> list[Row]:
             continue
         rows.extend(row["row"] for row in page)
         offset += PAGE
+
+    SCAN_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    SCAN_CACHE.write_text(json.dumps(rows))
     return rows
 
 
@@ -270,7 +299,8 @@ def fetch(
     matching = [row for row in (rows if rows is not None else scan()) if row["style"] == wanted]
     saved: list[Path] = []
     captions: dict[str, str] = {}
-    for row in choose(matching, count):
+    chosen = choose(matching, count)
+    for row in chosen:
         try:
             raw = urllib.request.urlopen(row["image"]["src"], timeout=60).read()
         except Exception:  # noqa: BLE001 -- one dead link is not a failed run
@@ -282,12 +312,14 @@ def fetch(
 
     (folder / CAPTIONS_FILE).write_text(json.dumps(captions, indent=2))
     if len(saved) < count:
-        artists = len({row["artist"] for row in matching})
+        raise ValueError(f"{style}: asked for {count}, got {len(saved)} -- the style has no more")
+    share = concentration(chosen)
+    if share > CONCENTRATION_LIMIT:
+        top = Counter(row["artist"] for row in chosen).most_common(1)[0][0]
         raise ValueError(
-            f"{style}: asked for {count}, got {len(saved)}. The style has "
-            f"{len(matching)} rows across {artists} artists, and no artist may "
-            f"supply more than a {ARTIST_SHARE}th of the set -- so it is too "
-            f"concentrated to fill this many. Lower the count or pick another style."
+            f"{style}: artist {top} paints {share:.0%} of this set, over the "
+            f"{CONCENTRATION_LIMIT:.0%} limit. The adapter would learn a painter, not a "
+            f"style, and no measurement downstream could tell the difference."
         )
     return saved
 

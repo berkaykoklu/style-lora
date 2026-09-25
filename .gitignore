@@ -14,3 +14,6 @@ node_modules/
 # Build notes stay local; the repository publishes the project, not how it was made.
 docs/superpowers/
 style-lora-results/
+
+# Someone else's notebook, kept locally for reference
+stable-diffusion-1-5-lora-fine-tuning.ipynb

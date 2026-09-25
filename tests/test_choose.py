@@ -1,4 +1,6 @@
-from stylelora.data import ARTIST_SHARE, GENRE_NAMES, Row, choose
+import pytest
+
+from stylelora.data import CONCENTRATION_LIMIT, GENRE_NAMES, Row, choose, concentration
 
 SKETCH = GENRE_NAMES.index("sketch_and_study")
 PORTRAIT = GENRE_NAMES.index("portrait")
@@ -18,18 +20,15 @@ def test_sketches_are_dropped() -> None:
     assert all(row["genre"] != SKETCH for row in chosen)
 
 
-def test_no_artist_takes_more_than_their_share() -> None:
-    """Shuffling fixes where in the list we look, not who fills it. One painter
-    who is most of a style would still be most of the sample."""
+def test_one_prolific_painter_does_not_fill_the_set() -> None:
+    """Shuffling fixes where in the list we look, not who fills it: a painter
+    who is most of a style would still be most of the sample. Round-robin gives
+    him one turn like everyone else."""
     rows = _rows([0] * 100 + list(range(1, 40)))
 
     chosen = choose(rows, count=32)
 
-    cap = 32 // ARTIST_SHARE
-    counts: dict[int, int] = {}
-    for row in chosen:
-        counts[row["artist"]] = counts.get(row["artist"], 0) + 1
-    assert max(counts.values()) <= cap
+    assert concentration(chosen) <= 1 / 8
 
 
 def test_a_smaller_set_is_a_subset_of_a_larger_one() -> None:
@@ -58,14 +57,28 @@ def test_a_different_seed_gives_a_different_set() -> None:
     assert first != second
 
 
-def test_a_style_by_one_painter_comes_back_short_rather_than_concentrated() -> None:
-    """Returning a full set of one artist would be the original bug wearing a
-    cap. Coming back short is what makes fetch refuse and say why."""
+def test_a_style_by_one_painter_still_fills_but_reports_itself() -> None:
+    """Choosing does not refuse -- a cap that did refused more than it fixed,
+    since most styles here have too few painters to satisfy one. The set comes
+    back full and `concentration` is what says it is a painter, not a style."""
     rows = _rows([7] * 100)
 
     chosen = choose(rows, count=40)
 
-    assert len(chosen) == 40 // ARTIST_SHARE
+    assert len(chosen) == 40
+    assert concentration(chosen) == 1.0
+    assert concentration(chosen) > CONCENTRATION_LIMIT
+
+
+def test_an_even_spread_scores_low() -> None:
+    rows = _rows(list(range(40)))
+
+    assert concentration(choose(rows, count=40)) == 1 / 40
+
+
+def test_measuring_nothing_is_refused() -> None:
+    with pytest.raises(ValueError):
+        concentration([])
 
 
 def test_asking_for_more_than_exists_returns_what_exists() -> None:
