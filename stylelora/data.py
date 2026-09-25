@@ -7,11 +7,15 @@ well as by style, and there would be no way afterwards to say which.
 
 from __future__ import annotations
 
+import argparse
 import io
 import json
+import random
 import time
 import urllib.request
+from collections import Counter
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 
@@ -35,6 +39,11 @@ STYLES = ("Baroque", "Art_Nouveau")
 # the one thing the comparison is built to avoid.
 PER_STYLE = 130
 HOLDOUT = 30
+
+# No artist may supply more than 1/ARTIST_SHARE of a style's training set.
+# Eight is loose enough that a style dominated by two or three painters still
+# fills up, and tight enough that no single one of them defines it.
+ARTIST_SHARE = 8
 TRAIN_POOL = PER_STYLE - HOLDOUT
 
 # What sd-turbo was trained at. Feeding it another size means asking the model
@@ -102,6 +111,10 @@ GENRE_NAMES = (
     "sketch_and_study", "still_life", "Unknown Genre",
 )
 
+# One WikiArt row as the rows endpoint returns it: style, genre and artist are
+# class-label integers, image carries the URL.
+Row = dict[str, Any]
+
 CAPTIONS_FILE = "captions.json"
 
 ROWS_URL = "https://datasets-server.huggingface.co/rows"
@@ -148,21 +161,85 @@ def caption_for(genre: int) -> str:
     return GENRE_CAPTIONS[GENRE_NAMES[genre]]
 
 
+def choose(rows: list[Row], count: int, seed: int = 0) -> list[Row]:
+    """Which of a style's rows to train on.
+
+    Three rules, each answering something the first version of this got wrong.
+
+    **Shuffled, not the first N.** WikiArt is ordered by artist, so taking rows
+    in order took one artist's body of work: twenty "Baroque" images that were
+    twenty Rembrandts. Shuffling with a fixed seed keeps the nesting -- the
+    first 20 of a shuffle are a subset of the first 100 -- while sampling across
+    the whole style.
+
+    **Capped per artist.** Shuffling alone only fixes where in the list we look.
+    If one painter is sixty percent of a style's rows he is still sixty percent
+    of the sample, and the adapter learns him rather than the style. No artist
+    may supply more than an eighth of the set.
+
+    **No sketches.** Half the Rembrandts were pen studies and etchings on cream
+    paper, which teach line and paper, not a painted style. WikiArt labels them
+    in its genre column, so they can be dropped by name instead of by eye.
+    """
+    sketch = GENRE_NAMES.index("sketch_and_study")
+    paintings = [row for row in rows if row["genre"] != sketch]
+
+    shuffled = list(paintings)
+    random.Random(seed).shuffle(shuffled)
+
+    cap = max(count // ARTIST_SHARE, 1)
+    taken: list[Row] = []
+    per_artist: Counter[int] = Counter()
+    for row in shuffled:
+        if len(taken) >= count:
+            break
+        if per_artist[row["artist"]] >= cap:
+            continue
+        per_artist[row["artist"]] += 1
+        taken.append(row)
+    return taken
+
+
+def contact_sheet(folder: Path, thumb: int = 200, cols: int = 5) -> Image.Image:
+    """Every image in one picture, so the set can be looked at before training.
+
+    The separation gate asks whether two styles differ from each other. It
+    cannot ask whether either of them is the style on the label, and the first
+    run of this project trained for three hours on two sets that were not --
+    every number correct, every number about the wrong thing. Nothing catches
+    that except looking.
+    """
+    paths = sorted(folder.glob("*.png"))
+    if not paths:
+        raise ValueError(f"no images in {folder}")
+    rows = (len(paths) + cols - 1) // cols
+    sheet = Image.new("RGB", (cols * thumb, rows * thumb), (255, 255, 255))
+    for i, path in enumerate(paths):
+        with Image.open(path) as image:
+            sheet.paste(image.resize((thumb, thumb)), (i % cols * thumb, i // cols * thumb))
+    return sheet
+
+
 def fetch(style: str, count: int = PER_STYLE, out: Path | None = None) -> list[Path]:
     """Download `count` images of one style, write them, and note their subjects.
 
+    Every matching row is listed first and the choice made over the whole set --
+    see `choose`. Downloading while scanning is faster and is what produced a
+    one-artist training set.
+
     The rows endpoint rate-limits under load and clears on its own, so a failed
-    page waits and retries rather than aborting a run that is most of the way
+    page waits and retries rather than aborting a scan that is most of the way
     through.
     """
     wanted = style_index(style)
     folder = out or Path("data") / style
     folder.mkdir(parents=True, exist_ok=True)
 
-    saved: list[Path] = []
-    captions: dict[str, str] = {}
+    # Scan first, choose second, download third. The scan is metadata only, so
+    # listing every row of a style costs a hundred small requests and no images.
+    matching: list[Row] = []
     offset = 0
-    while len(saved) < count and offset < TOTAL_ROWS:
+    while offset < TOTAL_ROWS:
         url = (
             f"{ROWS_URL}?dataset=huggan%2Fwikiart&config=default&split=train"
             f"&offset={offset}&length={PAGE}"
@@ -172,18 +249,50 @@ def fetch(style: str, count: int = PER_STYLE, out: Path | None = None) -> list[P
         except Exception:  # noqa: BLE001 -- a rate limit should pause, not abort
             time.sleep(5)
             continue
-        for row in rows:
-            if row["row"]["style"] != wanted or len(saved) >= count:
-                continue
-            try:
-                raw = urllib.request.urlopen(row["row"]["image"]["src"], timeout=60).read()
-            except Exception:  # noqa: BLE001
-                continue
-            path = folder / f"{len(saved):02d}.png"
-            prepare(Image.open(io.BytesIO(raw))).save(path)
-            captions[path.name] = caption_for(row["row"]["genre"])
-            saved.append(path)
+        matching.extend(row["row"] for row in rows if row["row"]["style"] == wanted)
         offset += PAGE
 
+    saved: list[Path] = []
+    captions: dict[str, str] = {}
+    for row in choose(matching, count):
+        try:
+            raw = urllib.request.urlopen(row["image"]["src"], timeout=60).read()
+        except Exception:  # noqa: BLE001 -- one dead link is not a failed run
+            continue
+        path = folder / f"{len(saved):02d}.png"
+        prepare(Image.open(io.BytesIO(raw))).save(path)
+        captions[path.name] = caption_for(row["genre"])
+        saved.append(path)
+
     (folder / CAPTIONS_FILE).write_text(json.dumps(captions, indent=2))
+    if len(saved) < count:
+        artists = len({row["artist"] for row in matching})
+        raise ValueError(
+            f"{style}: asked for {count}, got {len(saved)}. The style has "
+            f"{len(matching)} rows across {artists} artists, and no artist may "
+            f"supply more than a {ARTIST_SHARE}th of the set -- so it is too "
+            f"concentrated to fill this many. Lower the count or pick another style."
+        )
     return saved
+
+
+def main() -> None:
+    """Fetch some styles and write a contact sheet of each, to be looked at."""
+    parser = argparse.ArgumentParser(description="fetch styles and show what arrived")
+    parser.add_argument("styles", nargs="+", help=f"any of: {', '.join(STYLE_NAMES)}")
+    parser.add_argument("--count", type=int, default=20)
+    parser.add_argument("--out", type=Path, default=Path("data"))
+    args = parser.parse_args()
+
+    for style in args.styles:
+        folder = args.out / style
+        have = sorted(folder.glob("*.png"))
+        if len(have) < args.count:
+            have = fetch(style, count=args.count, out=folder)
+        sheet = folder.parent / f"{style}.jpg"
+        contact_sheet(folder).save(sheet, quality=88)
+        print(f"{style:24} {len(have):>3} images -> {sheet}")
+
+
+if __name__ == "__main__":
+    main()
