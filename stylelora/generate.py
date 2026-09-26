@@ -36,10 +36,15 @@ PROMPTS: tuple[str, ...] = (
     "a traveller on a mountain path",
 )
 
-# sd-turbo is distilled for very few steps and trained without classifier-free
-# guidance, so a guidance scale above zero makes it worse rather than better.
-STEPS = 2
-GUIDANCE = 0.0
+# SD 1.5 is not distilled: it needs a real sampling schedule and the
+# classifier-free guidance it was trained with. The two-step, zero-guidance
+# settings here before belonged to sd-turbo, and every image above half adapter
+# strength collapsed to the same point whatever the adapter had learned.
+#
+# Thirty is enough to be stable without paying for fifty; 7.5 is the scale the
+# model card's own examples use.
+STEPS = 30
+GUIDANCE = 7.5
 
 
 @lru_cache(maxsize=1)

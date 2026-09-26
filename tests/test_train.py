@@ -4,37 +4,27 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from stylelora.train import BASE_MODEL, FALLBACK_CAPTION, LR, RANK, STEPS, train
+from stylelora.data import FALLBACK_CAPTION
+from stylelora.train import BASE_MODEL, LR, RANK, STEPS, train
 
 
-def test_the_base_model_is_the_cached_one() -> None:
-    """A different id here means a multi-gigabyte download nobody asked for."""
-    assert BASE_MODEL == "stabilityai/sd-turbo"
+def test_the_base_model_is_the_one_the_recipe_was_written_for() -> None:
+    """The deprecated `runwayml/stable-diffusion-v1-5` was removed from the Hub;
+    this is the mirror its own model card points at."""
+    assert BASE_MODEL == "sd-legacy/stable-diffusion-v1-5"
 
 
-def test_the_rank_is_small_enough_to_be_a_style_adapter() -> None:
-    """Rank is capacity. A large one starts memorising paintings rather than
-    learning the style they share."""
-    assert RANK <= 16
+def test_the_rank_is_in_the_range_the_reference_trains_styles_at() -> None:
+    """Rank is capacity. The reference trains a style at 62; a rank in single
+    figures was one of the settings that made the first adapters barely move."""
+    assert 16 <= RANK <= 64
 
 
-def test_no_caption_names_a_style() -> None:
-    """Captions say what is in the picture, never how it is painted. A caption
-    that named the style would teach the model to wait for the word."""
-    from stylelora.data import GENRE_CAPTIONS
-
-    for caption in (*GENRE_CAPTIONS.values(), FALLBACK_CAPTION):
-        lowered = caption.lower()
-        for word in ("baroque", "nouveau", "style", "ornate", "dramatic"):
-            assert word not in lowered, f"{caption!r} contains {word!r}"
-
-
-def test_captions_differ_between_subjects() -> None:
-    """One caption for every image left the adapter carrying the content as
-    well as the style, and both styles learned the same thing."""
-    from stylelora.data import GENRE_CAPTIONS
-
-    assert len(set(GENRE_CAPTIONS.values())) > 5
+def test_the_fallback_caption_names_no_style() -> None:
+    """Captions say what is in the picture, never how it is painted. The rest
+    of this rule lives in test_data, where the sanitiser is."""
+    for word in ("baroque", "ukiyo", "style", "woodblock"):
+        assert word not in FALLBACK_CAPTION.lower()
 
 
 def test_both_styles_would_get_the_same_settings() -> None:
@@ -71,13 +61,16 @@ def test_a_tiny_run_writes_weights(tmp_path: Path) -> None:
     assert out.exists()
 
 
-def test_training_runs_in_full_precision_on_every_device() -> None:
-    """Half precision gave a loss of nan from the first step on a T4: the VAE
-    overflows float16's range and every weight after that is ruined."""
+def test_half_precision_only_where_there_is_a_scaler_for_it() -> None:
+    """Half precision alone gave a loss of nan from the first step: the VAE
+    overflows float16's range. Abandoning it entirely was an over-correction --
+    it halves what fits in a batch -- so it is used the way the reference does,
+    with a GradScaler, which exists on CUDA and not on MPS."""
     from stylelora.train import _dtype
 
-    for device in ("cuda", "mps", "cpu"):
-        assert _dtype(device).itemsize == 4
+    assert _dtype("cuda").itemsize == 2
+    assert _dtype("mps").itemsize == 4
+    assert _dtype("cpu").itemsize == 4
 
 
 def test_a_finite_loss_passes_through() -> None:
@@ -118,13 +111,23 @@ def test_the_error_names_the_step_it_failed_on() -> None:
         check_finite(torch.tensor(float("nan")), step=17)
 
 
-def test_images_are_encoded_in_chunks_not_all_at_once() -> None:
-    """Twenty images through the VAE in one pass filled a 15 GB card before
-    the first training step, for a loop that uses one image at a time."""
-    from stylelora.data import PER_STYLE
-    from stylelora.train import ENCODE_BATCH
+def test_the_batch_is_not_one() -> None:
+    """A batch of one was the largest single divergence from the reference:
+    500 steps showed the model 500 images where the reference shows 8000, and
+    the adapters that came out of it barely moved."""
+    from stylelora.train import ACCUMULATION, BATCH
 
-    assert ENCODE_BATCH < PER_STYLE
+    assert BATCH * ACCUMULATION >= 8
+
+
+def test_the_learning_rate_scales_with_the_batch() -> None:
+    """A bigger batch is a steadier gradient and can take a longer stride.
+    Leaving the rate fixed would make changing the batch quietly change how
+    hard each step pulls, which is a second difference in a one-difference
+    comparison."""
+    from stylelora.train import ACCUMULATION, BATCH, LR
+
+    assert pytest.approx(8e-5) == LR * BATCH * ACCUMULATION
 
 
 def test_training_noise_comes_from_a_ddpm_schedule() -> None:
@@ -145,11 +148,36 @@ def test_training_noise_comes_from_a_ddpm_schedule() -> None:
     assert not hasattr(scheduler, "sigmas")
 
 
-def test_training_stays_in_the_noise_range_the_model_samples() -> None:
-    """sd-turbo visits [999, 499] at two steps. Training uniformly across the
-    whole schedule spent half its gradient where inference never goes, and
-    both styles came out as the same warm blur."""
-    from stylelora.train import TIMESTEP_FLOOR
+def test_training_samples_the_whole_noise_schedule() -> None:
+    """The floor this replaces was a patch for sd-turbo, which visits only two
+    timesteps at inference. SD 1.5 visits the whole range, so a floor would now
+    leave half of it untrained -- the opposite of the bug it was added for."""
+    import stylelora.train as trainer
 
-    assert TIMESTEP_FLOOR >= 499
-    assert TIMESTEP_FLOOR < 999
+    assert not hasattr(trainer, "TIMESTEP_FLOOR")
+
+
+def test_the_near_clean_end_of_the_schedule_is_weighted_down() -> None:
+    """Every timestep is a different task and they do not contribute equally.
+    Weighting by min(SNR, gamma)/SNR holds back the steps where the latent is
+    mostly signal, and leaves the noisy ones at full weight."""
+    import torch
+
+    from stylelora.train import SNR_GAMMA, snr_weights, training_scheduler
+
+    scheduler = training_scheduler()
+    near_clean = snr_weights(scheduler, torch.tensor([10]), SNR_GAMMA)
+    noisy = snr_weights(scheduler, torch.tensor([900]), SNR_GAMMA)
+
+    # The near-clean end is where the epsilon objective produces outsized
+    # gradients, so that is the end held back.
+    assert float(near_clean) < 0.1
+    assert float(noisy) == pytest.approx(1.0)
+
+
+def test_the_base_model_is_not_a_distilled_one() -> None:
+    """sd-turbo is distilled to two steps, and everything it produced above
+    half strength collapsed to one point regardless of rank or data."""
+    from stylelora.train import BASE_MODEL
+
+    assert "turbo" not in BASE_MODEL

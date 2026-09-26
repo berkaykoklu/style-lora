@@ -1,143 +1,123 @@
-"""Pulling one style out of WikiArt, and putting it in a shape the trainer wants.
+"""Two styles out of one collection, in the shape the trainer wants.
 
-Both styles come from the same collection, preprocessed the same way, in equal
+Both styles come from the same dataset, preprocessed the same way, in equal
 numbers. Two LoRAs trained on two different sources would differ by source as
 well as by style, and there would be no way afterwards to say which.
+
+Ukiyo-e and Baroque, because the pair has to clear two bars at once. Anyone can
+tell a Japanese woodblock print from a dark Dutch oil painting, which is what
+makes a blind human judgement possible at all. And both of them depict people,
+places and scenes -- so the styles differ in *how* they depict, not in whether
+they depict anything. A pair like Baroque against Abstract Expressionism would
+be more distinct and useless: an adapter that removed every recognisable object
+would score well, and this project measures precisely what style costs in
+recognisable objects.
+
+The previous source (`huggan/wikiart`) was abandoned after measuring it: its
+Baroque is 466 works by one painter, it holds no Ukiyo-e at all, and its best
+style pair separates no better than the pair that had already failed.
 """
 
 from __future__ import annotations
 
-import argparse
 import io
 import json
 import random
-import time
 import urllib.request
-from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
-DATASET = "huggan/wikiart"
-STYLES = ("Baroque", "Art_Nouveau")
+DATASET = "keremberke/painting-style-classification"
+PARQUET = (
+    "https://huggingface.co/api/datasets/keremberke/"
+    "painting-style-classification/parquet/full/train/0.parquet"
+)
 
-# Fetched per style, then split.
-#
-# The last HOLDOUT images are never trained on. The style centre is built from
-# them instead, because a centre made of the training images rewards an adapter
-# for memorising them: reproduce one painting and you sit exactly on the target
-# without having learned a style at all. Held-out images make the target
-# something the adapter has never seen.
-#
-# The remaining TRAIN_POOL is what the data axis sweeps inside, so a 20-image
-# run trains on a subset of what a 100-image run sees.
-#
-# The ceiling is Baroque's 466 rows (Art Nouveau has 760, Impressionism 3345 --
-# this is an 11,320-row subset of WikiArt, not the whole of it). Raising
-# PER_STYLE past 466 would leave the two styles with different counts, which is
-# the one thing the comparison is built to avoid.
-PER_STYLE = 130
-HOLDOUT = 30
+STYLES = ("Ukiyo_e", "Baroque")
 
+# Ukiyo-e is the smaller of the two at 66 works, and the two sets have to match.
+# Sixty leaves the holdout intact and still fills a training pool larger than
+# the reference implementation trains on.
+PER_STYLE = 60
+HOLDOUT = 20
 TRAIN_POOL = PER_STYLE - HOLDOUT
 
-# What sd-turbo was trained at. Feeding it another size means asking the model
-# to work at a scale it has never seen.
+# What Stable Diffusion 1.5 was trained at. Another size asks the model to work
+# at a scale it has never seen.
 SIZE = 512
 
-# WikiArt's style column is a class label; these are its names in order.
-STYLE_NAMES = (
-    "Abstract_Expressionism",
-    "Action_painting",
-    "Analytical_Cubism",
-    "Art_Nouveau",
-    "Baroque",
-    "Color_Field_Painting",
-    "Contemporary_Realism",
-    "Cubism",
-    "Early_Renaissance",
-    "Expressionism",
-    "Fauvism",
-    "High_Renaissance",
-    "Impressionism",
-    "Mannerism_Late_Renaissance",
-    "Minimalism",
-    "Naive_Art_Primitivism",
-    "New_Realism",
-    "Northern_Renaissance",
-    "Pointillism",
-    "Pop_Art",
-    "Post_Impressionism",
-    "Realism",
-    "Rococo",
-    "Romanticism",
-    "Symbolism",
-    "Synthetic_Cubism",
-    "Ukiyo_e",
+# The dataset ships its labels in a loading script, which `datasets` no longer
+# runs, so the order is recorded here instead. It is the order the label
+# integers index into.
+LABEL_NAMES = (
+    "Realism", "Art_Nouveau_Modern", "Analytical_Cubism", "Cubism", "Expressionism",
+    "Action_painting", "Synthetic_Cubism", "Symbolism", "Ukiyo_e", "Naive_Art_Primitivism",
+    "Post_Impressionism", "Impressionism", "Fauvism", "Rococo", "Minimalism",
+    "Mannerism_Late_Renaissance", "Color_Field_Painting", "High_Renaissance", "Romanticism",
+    "Pop_Art", "Contemporary_Realism", "Baroque", "New_Realism", "Pointillism",
+    "Northern_Renaissance", "Early_Renaissance", "Abstract_Expressionism",
 )
-
-# WikiArt's genre column, turned into captions that say what is in the
-# picture and nothing about how it is painted.
-#
-# One caption for every image was the first design, and it was wrong: with the
-# same text on all twenty, the adapter had to carry the content as well as the
-# style, and what both styles ended up sharing -- "a painting, not a
-# photograph" -- was the only signal strong enough to survive. The two
-# adapters became indistinguishable from each other.
-#
-# A caption that names the subject leaves the adapter only the style to learn.
-GENRE_CAPTIONS = {
-    "abstract_painting": "an abstract composition",
-    "cityscape": "a view of a city",
-    "genre_painting": "a scene of everyday life",
-    "illustration": "an illustration",
-    "landscape": "a landscape",
-    "nude_painting": "a nude figure",
-    "portrait": "a portrait",
-    "religious_painting": "a religious scene",
-    "sketch_and_study": "a study of a figure",
-    "still_life": "a still life",
-    "Unknown Genre": "a painting",
-}
-
-GENRE_NAMES = (
-    "abstract_painting", "cityscape", "genre_painting", "illustration",
-    "landscape", "nude_painting", "portrait", "religious_painting",
-    "sketch_and_study", "still_life", "Unknown Genre",
-)
-
-# One WikiArt row as the rows endpoint returns it: style, genre and artist are
-# class-label integers, image carries the URL.
-Row = dict[str, Any]
 
 CAPTIONS_FILE = "captions.json"
+FALLBACK_CAPTION = "a painting"
 
-# The scan is a hundred sequential requests and takes about ten minutes, while
-# what it returns never changes. Kept next to the images rather than in a temp
-# directory so a Colab runtime that mounts Drive keeps it too.
-SCAN_CACHE = Path("data") / "rows.json"
+# Words a caption may not carry.
+#
+# The captioner is a model, not a fixed table, and it will happily write "an
+# ukiyo-e print of a wave" or "a baroque portrait". That hands the style to the
+# text encoder, and the adapter is then measured on a job the prompt was already
+# doing -- the same mistake as putting the style word in a test prompt, arriving
+# through a different door.
+#
+# Stripped rather than rejected: the rest of the caption is still the subject,
+# which is what it is for.
+STYLE_WORDS = (
+    "ukiyo-e", "ukiyo", "baroque", "woodblock", "woodcut", "japanese", "dutch",
+    "rembrandt", "hokusai", "hiroshige", "renaissance", "impressionist",
+)
 
-ROWS_URL = "https://datasets-server.huggingface.co/rows"
-TOTAL_ROWS = 11_320
-PAGE = 100
+Row = dict[str, Any]
+Captioner = Callable[[list[Image.Image]], list[str]]
 
 
-def split(folder: Path) -> tuple[list[Path], list[Path]]:
-    """The training pool and the held-out images, in fetch order.
+def sanitise(text: str) -> str:
+    """A caption with the style taken out of it.
 
-    Positional, not random: the folder order is the dataset order, so every
-    run in the sweep sees the same paintings in the same order and two runs
-    differ by how many rather than by which.
+    Returns the fallback when nothing recognisable is left, because a caption
+    reduced to "a of" teaches the adapter less than a caption that admits it
+    knows nothing.
     """
-    paths = sorted(folder.glob("*.png"))
-    return paths[:TRAIN_POOL], paths[TRAIN_POOL:]
+    kept = [word for word in text.split() if word.strip(".,'\"").lower() not in STYLE_WORDS]
+    cleaned = " ".join(kept).strip(" .,")
+    return cleaned if len(cleaned.split()) >= 3 else FALLBACK_CAPTION
 
 
 def style_index(name: str) -> int:
-    if name not in STYLE_NAMES:
-        raise ValueError(f"{name} is not a WikiArt style")
-    return STYLE_NAMES.index(name)
+    if name not in LABEL_NAMES:
+        raise ValueError(f"{name} is not a style in {DATASET}")
+    return LABEL_NAMES.index(name)
+
+
+def choose(rows: list[Row], count: int, seed: int = 0) -> list[Row]:
+    """Which of a style's rows to train on.
+
+    Shuffled with a fixed seed rather than taken in order. Order in these
+    collections tracks the artist, and taking the first N once produced twenty
+    "Baroque" images that were twenty Rembrandts. A seeded shuffle also keeps
+    the nesting the data axis depends on: the first 20 of a shuffle are a subset
+    of the first 60, so a small run trains on a subset of what a large one sees
+    rather than on different paintings.
+
+    This dataset carries no artist column, so a set cannot be checked for being
+    one painter the way the previous source could. The styles here are distant
+    enough that it matters less, but it is a limit and not a solved problem.
+    """
+    shuffled = list(rows)
+    random.Random(seed).shuffle(shuffled)
+    return shuffled[:count]
 
 
 def prepare(image: Image.Image, size: int = SIZE) -> Image.Image:
@@ -155,78 +135,23 @@ def prepare(image: Image.Image, size: int = SIZE) -> Image.Image:
     return square.resize((size, size), Image.Resampling.LANCZOS)
 
 
-def caption_for(genre: int) -> str:
-    """What is in the picture, said without naming how it is painted."""
-    if not 0 <= genre < len(GENRE_NAMES):
-        return GENRE_CAPTIONS["Unknown Genre"]
-    return GENRE_CAPTIONS[GENRE_NAMES[genre]]
+def split(folder: Path) -> tuple[list[Path], list[Path]]:
+    """The training pool and the held-out images, in fetch order.
 
-
-def choose(rows: list[Row], count: int, seed: int = 0) -> list[Row]:
-    """Which of a style's rows to train on.
-
-    **Shuffled, not the first N.** WikiArt is ordered by artist, so taking rows
-    in order took one artist's body of work: twenty "Baroque" images that were
-    twenty Rembrandts. Shuffling with a fixed seed keeps the nesting -- the
-    first 20 of a shuffle are a subset of the first 100 -- while drawing from
-    the whole style.
-
-    **Round-robin across artists, not a cap.** A cap was the first design and it
-    refused more than it fixed: at twenty images a one-eighth cap needs eight
-    painters, and only two of this dataset's sixteen styles have that many.
-    Taking one from each artist in turn spreads the set as evenly as the style
-    allows and never fails -- a style by a single painter still returns a full
-    set, and `concentration` is what says so.
-
-    **No sketches.** Half the Rembrandts were pen studies and etchings on cream
-    paper, which teach line and paper rather than a painted style. WikiArt
-    labels them in its genre column, so they go by name instead of by eye.
+    The last HOLDOUT are never trained on, and the style centre is built from
+    them. A centre made of the training images rewards an adapter for memorising
+    one: reproduce a painting and you sit exactly on the target without having
+    learned a style at all.
     """
-    sketch = GENRE_NAMES.index("sketch_and_study")
-    shuffled = [row for row in rows if row["genre"] != sketch]
-    random.Random(seed).shuffle(shuffled)
-
-    queues: dict[int, list[Row]] = {}
-    for row in shuffled:
-        queues.setdefault(row["artist"], []).append(row)
-
-    taken: list[Row] = []
-    while len(taken) < count:
-        served = False
-        for queue in queues.values():
-            if len(taken) >= count:
-                break
-            if queue:
-                taken.append(queue.pop(0))
-                served = True
-        if not served:  # every artist exhausted
-            break
-    return taken
-
-
-def concentration(rows: list[Row]) -> float:
-    """The largest share any one artist holds.
-
-    A style is only a style if more than one hand made it. At 1.0 the adapter
-    would learn a painter, and the label on the result would be wrong in a way
-    no separation gate can see -- the first run of this project trained on 466
-    Rembrandts labelled "Baroque".
-    """
-    if not rows:
-        raise ValueError("no rows to measure")
-    counts = Counter(row["artist"] for row in rows)
-    return counts.most_common(1)[0][1] / len(rows)
-
-
-# Above this, the set is one painter wearing a style's name.
-CONCENTRATION_LIMIT = 0.5
+    paths = sorted(folder.glob("*.png"))
+    return paths[:TRAIN_POOL], paths[TRAIN_POOL:]
 
 
 def contact_sheet(folder: Path, thumb: int = 200, cols: int = 5) -> Image.Image:
-    """Every image in one picture, so the set can be looked at before training.
+    """Every image in one picture, so a set can be looked at before training.
 
     The separation gate asks whether two styles differ from each other. It
-    cannot ask whether either of them is the style on the label, and the first
+    cannot ask whether either of them is the style on the label, and an earlier
     run of this project trained for three hours on two sets that were not --
     every number correct, every number about the wrong thing. Nothing catches
     that except looking.
@@ -242,109 +167,54 @@ def contact_sheet(folder: Path, thumb: int = 200, cols: int = 5) -> Image.Image:
     return sheet
 
 
-def scan() -> list[Row]:
-    """Every row's metadata, no images.
+def download(destination: Path) -> Path:
+    """The dataset as one parquet file.
 
-    Choosing well means choosing over the whole style rather than over
-    whatever came first, so the list has to exist before anything is picked.
-    It is metadata only -- a hundred small requests and not one painting.
-
-    Returned rather than fetched per style, because comparing five styles
-    would otherwise walk the dataset five times.
+    Fetched with urllib rather than through `load_dataset`, which rewrites a
+    huggingface.co URL as a repository path and then cannot find it. The
+    original loading script no longer runs at all -- `datasets` dropped script
+    support -- so the auto-converted parquet is what is left.
     """
-    if SCAN_CACHE.exists():
-        cached: list[Row] = json.loads(SCAN_CACHE.read_text())
-        return cached
-
-    rows: list[Row] = []
-    offset = 0
-    while offset < TOTAL_ROWS:
-        url = (
-            f"{ROWS_URL}?dataset=huggan%2Fwikiart&config=default&split=train"
-            f"&offset={offset}&length={PAGE}"
-        )
-        try:
-            page = json.loads(urllib.request.urlopen(url, timeout=60).read())["rows"]
-        except Exception:  # noqa: BLE001 -- a rate limit should pause, not abort
-            time.sleep(5)
-            continue
-        rows.extend(row["row"] for row in page)
-        offset += PAGE
-
-    SCAN_CACHE.parent.mkdir(parents=True, exist_ok=True)
-    SCAN_CACHE.write_text(json.dumps(rows))
-    return rows
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists():
+        urllib.request.urlretrieve(PARQUET, destination)
+    return destination
 
 
-def fetch(
-    style: str,
-    count: int = PER_STYLE,
-    out: Path | None = None,
-    rows: list[Row] | None = None,
-) -> list[Path]:
-    """Download `count` images of one style, write them, and note their subjects.
-
-    Every matching row is listed first and the choice made over the whole set --
-    see `choose`. Downloading while scanning is faster and is what produced a
-    one-artist training set.
-
-    The rows endpoint rate-limits under load and clears on its own, so a failed
-    page waits and retries rather than aborting a scan that is most of the way
-    through.
-    """
-    wanted = style_index(style)
-    folder = out or Path("data") / style
+def write_images(rows: list[Row], folder: Path) -> list[Path]:
+    """Square 512px PNGs, numbered in the order they were chosen."""
     folder.mkdir(parents=True, exist_ok=True)
-
-    matching = [row for row in (rows if rows is not None else scan()) if row["style"] == wanted]
     saved: list[Path] = []
-    captions: dict[str, str] = {}
-    chosen = choose(matching, count)
-    for row in chosen:
-        try:
-            raw = urllib.request.urlopen(row["image"]["src"], timeout=60).read()
-        except Exception:  # noqa: BLE001 -- one dead link is not a failed run
-            continue
+    for row in rows:
+        raw = row["image"]
+        image = raw if isinstance(raw, Image.Image) else Image.open(io.BytesIO(raw["bytes"]))
         path = folder / f"{len(saved):02d}.png"
-        prepare(Image.open(io.BytesIO(raw))).save(path)
-        captions[path.name] = caption_for(row["genre"])
+        prepare(image).save(path)
         saved.append(path)
-
-    (folder / CAPTIONS_FILE).write_text(json.dumps(captions, indent=2))
-    if len(saved) < count:
-        raise ValueError(f"{style}: asked for {count}, got {len(saved)} -- the style has no more")
-    share = concentration(chosen)
-    if share > CONCENTRATION_LIMIT:
-        top = Counter(row["artist"] for row in chosen).most_common(1)[0][0]
-        raise ValueError(
-            f"{style}: artist {top} paints {share:.0%} of this set, over the "
-            f"{CONCENTRATION_LIMIT:.0%} limit. The adapter would learn a painter, not a "
-            f"style, and no measurement downstream could tell the difference."
-        )
     return saved
 
 
-def main() -> None:
-    """Fetch some styles and write a contact sheet of each, to be looked at."""
-    parser = argparse.ArgumentParser(description="fetch styles and show what arrived")
-    parser.add_argument("styles", nargs="+", help=f"any of: {', '.join(STYLE_NAMES)}")
-    parser.add_argument("--count", type=int, default=20)
-    parser.add_argument("--out", type=Path, default=Path("data"))
-    args = parser.parse_args()
+def write_captions(paths: list[Path], folder: Path, caption: Captioner) -> dict[str, str]:
+    """One caption per image, naming its subject and not its style.
 
-    rows = None
-    for style in args.styles:
-        folder = args.out / style
-        have = sorted(folder.glob("*.png"))
-        if len(have) < args.count:
-            if rows is None:
-                print(f"scanning {TOTAL_ROWS} rows once...", flush=True)
-                rows = scan()
-            have = fetch(style, count=args.count, out=folder, rows=rows)
-        sheet = folder.parent / f"{style}.jpg"
-        contact_sheet(folder).save(sheet, quality=88)
-        print(f"{style:24} {len(have):>3} images -> {sheet}")
+    The caption carries the content so the adapter is left with the style, which
+    is the only thing the two runs are meant to differ by. One shared caption
+    was the first design and it was wrong: with the same text on all of them,
+    the adapter had to carry the content too, and what both styles shared --
+    "a painting, not a photograph" -- was the only signal strong enough to
+    survive. The two adapters came out indistinguishable.
 
-
-if __name__ == "__main__":
-    main()
+    The captioner is passed in. It is a second model, it only runs on the
+    machine that has a GPU, and the arithmetic here should be testable without
+    either.
+    """
+    images = [Image.open(p).convert("RGB") for p in paths]
+    texts = caption(images)
+    if len(texts) != len(paths):
+        raise ValueError(f"{len(paths)} images, {len(texts)} captions")
+    written = {
+        path.name: sanitise(text)
+        for path, text in zip(paths, texts, strict=True)
+    }
+    (folder / CAPTIONS_FILE).write_text(json.dumps(written, indent=2))
+    return written

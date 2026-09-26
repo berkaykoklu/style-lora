@@ -27,11 +27,12 @@ def test_prompts_name_a_subject_rather_than_a_mood() -> None:
         assert len(prompt.split()) >= 4
 
 
-def test_the_sampler_settings_match_a_distilled_model() -> None:
-    """sd-turbo is trained for very few steps and without guidance; raising
-    either makes its output worse, not better."""
-    assert STEPS <= 4
-    assert GUIDANCE == 0.0
+def test_the_sampler_settings_match_an_undistilled_model() -> None:
+    """SD 1.5 needs a real schedule and the guidance it was trained with. Two
+    steps and zero guidance were sd-turbo's settings, and under them everything
+    above half strength collapsed to one point regardless of the adapter."""
+    assert STEPS >= 20
+    assert GUIDANCE > 1.0
 
 
 def test_the_loader_and_the_saver_agree_on_the_file_name() -> None:
