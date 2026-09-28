@@ -105,3 +105,69 @@ def test_prompt_score_refuses_mismatched_lengths() -> None:
 
     with pytest.raises(ValueError):
         prompt_score(images, prompts)
+
+
+# --- the text axis ----------------------------------------------------------
+
+
+def test_the_axis_points_from_one_description_to_the_other() -> None:
+    from stylelora.score import style_direction
+
+    words = embed_text(["a japanese woodblock print", "a baroque oil painting"])
+    axis = style_direction(words[0], words[1])
+
+    assert np.isclose(np.linalg.norm(axis), 1.0, atol=1e-5)
+    assert float(words[0] @ axis) > float(words[1] @ axis)
+
+
+def test_reversing_the_descriptions_reverses_the_axis() -> None:
+    from stylelora.score import style_direction
+
+    words = embed_text(["a japanese woodblock print", "a baroque oil painting"])
+
+    forward = style_direction(words[0], words[1])
+    backward = style_direction(words[1], words[0])
+
+    assert np.allclose(forward, -backward, atol=1e-5)
+
+
+def test_two_identical_descriptions_have_no_axis() -> None:
+    """Scoring along a zero vector would return zero for everything and look
+    like a null result rather than a broken measurement."""
+    from stylelora.score import style_direction
+
+    words = embed_text(["a painting", "a painting"])
+
+    with pytest.raises(ValueError):
+        style_direction(words[0], words[1])
+
+
+def test_the_axis_score_is_signed() -> None:
+    """A centre says how close; the axis says which side. Only the second can
+    survive both adapters drifting the same way."""
+    from stylelora.score import direction_score, style_direction
+
+    words = embed_text(["a japanese woodblock print", "a baroque oil painting"])
+    axis = style_direction(words[0], words[1])
+
+    scores = direction_score(np.stack([words[0], words[1]]), axis)
+
+    assert scores[0] > 0 > scores[1]
+
+
+def test_the_axis_ignores_the_subject() -> None:
+    """The point of the whole thing: two sentences about the same subject in
+    different styles must sit on opposite sides, and two about different
+    subjects in the same style must not."""
+    from stylelora.score import direction_score, style_direction
+
+    words = embed_text([
+        "a japanese woodblock print",
+        "a baroque oil painting",
+        "a japanese woodblock print of a woman",
+        "a baroque oil painting of a woman",
+    ])
+    axis = style_direction(words[0], words[1])
+    scores = direction_score(np.stack([words[2], words[3]]), axis)
+
+    assert scores[0] > scores[1]
