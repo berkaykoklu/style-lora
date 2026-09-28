@@ -11,8 +11,9 @@ Vercel kendi tarafında kuruyor.
 1. **vercel.com/new** → `berkaykoklu/style-lora` reposunu içe aktar
 2. **Root Directory** → `web` seç (önemli, yoksa Python reposunu deploy eder)
 3. **Deploy**
-4. Proje açılınca **Storage** → **Create Database** → **Blob** → projeye bağla
-   (bağlanınca `BLOB_READ_WRITE_TOKEN` otomatik geliyor)
+4. Proje açılınca **Storage** → **Create Database** → **Blob** → **private** seç,
+   projeye bağla. Cevaplar herkese açık bir URL'de durmasın diye private;
+   kod da private yazıyor ve depo public olursa `put()` reddediyor.
 5. **Settings → Environment Variables** → `RESULTS_TOKEN` = kendi seçeceğin parola
 6. **Deployments** → en üstteki → **Redeploy** (4 ve 5'teki değişkenlerin gelmesi için)
 

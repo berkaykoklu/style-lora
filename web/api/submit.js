@@ -34,8 +34,11 @@ export default async function handler(request, response) {
   }
 
   try {
+    // Private, so an answer sheet is never sitting on a public URL. The store
+    // has to be created private too -- put() refuses a mismatch rather than
+    // quietly widening it, which is the right way round.
     const saved = await put(`responses/${Date.now()}.json`, serialised, {
-      access: 'public',
+      access: 'private',
       contentType: 'application/json',
       addRandomSuffix: true,
     });

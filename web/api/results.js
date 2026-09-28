@@ -3,7 +3,7 @@
 // Not open: the answers are a small dataset someone gave their afternoon to, and
 // an open endpoint would also let anyone add noise to it by reading the shape
 // first. The token lives in an environment variable, never in the page.
-import { list } from '@vercel/blob';
+import { get, list } from '@vercel/blob';
 
 export default async function handler(request, response) {
   const expected = process.env.RESULTS_TOKEN;
@@ -19,10 +19,17 @@ export default async function handler(request, response) {
   }
 
   const { blobs } = await list({ prefix: 'responses/' });
+
+  // A private blob has no fetchable URL: it is read back through the store with
+  // this project's own credentials, which is the whole point of it being private.
   const all = await Promise.all(
     blobs.map(async (blob) => {
-      const body = await fetch(blob.url).then((r) => r.json());
-      return { stored: blob.uploadedAt, ...body };
+      const file = await get(blob.pathname, { access: 'private' });
+      if (!file || file.statusCode !== 200) {
+        return { stored: blob.uploadedAt, error: 'unreadable', pathname: blob.pathname };
+      }
+      const text = await new Response(file.stream).text();
+      return { stored: blob.uploadedAt, ...JSON.parse(text) };
     })
   );
 
