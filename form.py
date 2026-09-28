@@ -213,10 +213,9 @@ _PAGE = """<!doctype html>
 </style></head>
 <body><div class="wrap">
 <h1>Stil değerlendirme</h1>
-<p class="intro">Her görsel için iki soru, 1 (hiç) – 5 (tamamen). Görsellerin nereden
+<p class="intro">Her görsel için üç soru, 1 (hiç) – 5 (tamamen). Görsellerin nereden
 geldiği yazmıyor; ilk izlenimine göre ver, uzun düşünme. Cevapların tarayıcıda
-saklanıyor, sekmeyi kapatsan da kaybolmuyor. Sonunda düğmeye basıp çıkan dosyayı
-geri yolla.</p>
+saklanıyor, sekmeyi kapatsan da kaybolmuyor. <span id="outro"></span></p>
 
 <div class="bar"><div class="track"><div class="fill" id="fill"></div></div>
 <p id="count">0 / __TOTAL__ tamamlandı</p></div>
@@ -224,12 +223,21 @@ geri yolla.</p>
 __CARDS__
 
 <div class="done">
-  <button id="save" disabled>Sonuçları indir</button>
+  <button id="save" disabled></button>
   <p id="hint">Hepsi doldurulunca aktifleşir.</p>
 </div>
 </div>
 <script>
-  const TOTAL = __TOTAL__, KEY = "style-eval-v1";
+  const TOTAL = __TOTAL__, KEY = "style-eval-v1", SUBMIT = __SUBMIT__;
+
+  // The button and the closing sentence say what will actually happen. They were
+  // hardcoded to the download wording once, and a page that posts while its
+  // button promises a file is a page nobody trusts twice.
+  const SEND_LABEL = SUBMIT ? "Gönder" : "Sonuçları indir";
+  document.getElementById("save").textContent = SEND_LABEL;
+  document.getElementById("outro").textContent = SUBMIT
+    ? "Sonunda Gönder'e bas, o kadar."
+    : "Sonunda düğmeye basıp çıkan dosyayı geri yolla.";
   let answers = {};
   try { answers = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { answers = {}; }
 
@@ -251,7 +259,9 @@ __CARDS__
     const ready = done === TOTAL;
     document.getElementById("save").disabled = !ready;
     document.getElementById("hint").textContent = ready
-      ? "Teşekkürler. Dosyayı indirip geri yolla." : "Hepsi doldurulunca aktifleşir.";
+      ? (SUBMIT ? "Hepsi tamam. Gönder'e basabilirsin."
+                : "Teşekkürler. Dosyayı indirip geri yolla.")
+      : "Hepsi doldurulunca aktifleşir.";
   }
 
   document.querySelectorAll(".scale").forEach(scale => {
@@ -270,8 +280,6 @@ __CARDS__
     });
   });
 
-  const SUBMIT = __SUBMIT__;
-
   function download() {
     const blob = new Blob([JSON.stringify(answers, null, 2)], {type: "application/json"});
     const a = document.createElement("a");
@@ -284,6 +292,7 @@ __CARDS__
   document.getElementById("save").addEventListener("click", async () => {
     const save = document.getElementById("save"), hint = document.getElementById("hint");
     if (!SUBMIT) { download(); return; }
+
 
     save.disabled = true;
     save.textContent = "Gönderiliyor...";
@@ -300,7 +309,7 @@ __CARDS__
       // A deploy that is down should cost an email, not the afternoon someone
       // already spent filling this in.
       save.disabled = false;
-      save.textContent = "Dosyayı indir";
+      save.textContent = "Dosyayı indir";  // the fallback, named honestly too
       hint.textContent = "Gönderilemedi. Dosyayı indirip yollayabilir misin?";
       save.onclick = download;
     }

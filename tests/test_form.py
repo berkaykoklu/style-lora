@@ -128,3 +128,44 @@ def test_an_unknown_prompt_falls_back_rather_than_blanks(tmp_path: Path) -> None
     from form import turkish
 
     assert turkish("a thing nobody translated") == "a thing nobody translated"
+
+
+# --- the button says what it does -------------------------------------------
+
+
+def test_a_posting_form_offers_to_send_not_to_download(tmp_path: Path) -> None:
+    """The label was hardcoded to the download wording while the page posted.
+    A button that promises a file and quietly uploads instead is a page nobody
+    trusts twice."""
+    path = tmp_path / "00.png"
+    Image.new("RGB", (64, 64)).save(path)
+    item = Item(path=path, source="base", prompt="a fox in a forest clearing")
+
+    build([item], tmp_path / "f.html", tmp_path / "k.json", submit_url="/api/submit")
+
+    html = (tmp_path / "f.html").read_text()
+    assert 'SUBMIT = "/api/submit"' in html
+    assert '"Gönder" : "Sonuçları indir"' in html
+
+
+def test_a_form_with_nowhere_to_post_still_offers_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "00.png"
+    Image.new("RGB", (64, 64)).save(path)
+    item = Item(path=path, source="base", prompt="a fox in a forest clearing")
+
+    build([item], tmp_path / "f.html", tmp_path / "k.json")
+
+    assert 'SUBMIT = ""' in (tmp_path / "f.html").read_text()
+
+
+def test_the_submit_constant_exists_before_anything_reads_it(tmp_path: Path) -> None:
+    """refresh() branches on SUBMIT and is defined above where it used to be
+    declared; only the order of the final call kept that working."""
+    path = tmp_path / "00.png"
+    Image.new("RGB", (64, 64)).save(path)
+    item = Item(path=path, source="base", prompt="a fox in a forest clearing")
+
+    build([item], tmp_path / "f.html", tmp_path / "k.json", submit_url="/api/submit")
+
+    html = (tmp_path / "f.html").read_text()
+    assert html.index("SUBMIT = ") < html.index("function refresh()")
