@@ -1,0 +1,67 @@
+from score_form import latest_per_rater, ratings_by_source
+
+KEY = [
+    {"n": 1, "source": "base", "prompt": "a"},
+    {"n": 2, "source": "Ukiyo_e", "prompt": "b"},
+    {"n": 3, "source": "Baroque", "prompt": "c"},
+]
+
+
+def test_one_rating_per_person_the_fullest_one() -> None:
+    """The form posts on every press, so a person part-way through leaves
+    several records that are prefixes of each other. Counting them all would
+    weight whoever pressed the button most."""
+    responses = [
+        {"rater": "a", "answers": {"1": {}}},
+        {"rater": "a", "answers": {"1": {}, "2": {}}},
+        {"rater": "b", "answers": {"1": {}}},
+    ]
+
+    kept = latest_per_rater(responses)
+
+    assert len(kept) == 2
+    assert {len(r["answers"]) for r in kept} == {2, 1}
+
+
+def test_records_without_a_rater_are_dropped() -> None:
+    """Those predate the id and are the test submissions made while wiring the
+    endpoint up."""
+    assert latest_per_rater([{"answers": {"1": {}}}, {"rater": "a", "answers": {"1": {}}}]) == [
+        {"rater": "a", "answers": {"1": {}}}
+    ]
+
+
+def test_a_rating_is_filed_under_the_adapter_that_drew_the_card() -> None:
+    responses = [
+        {
+            "rater": "a",
+            "answers": {
+                "1": {"ukiyo": 1, "baroque": 1, "content": 5},
+                "2": {"ukiyo": 5, "baroque": 1, "content": 4},
+                "3": {"ukiyo": 1, "baroque": 5, "content": 4},
+            },
+        }
+    ]
+
+    collected = ratings_by_source(responses, KEY)
+
+    assert collected["Ukiyo_e"]["ukiyo"] == [5]
+    assert collected["Baroque"]["baroque"] == [5]
+    assert collected["base"]["ukiyo"] == [1]
+
+
+def test_a_card_the_key_does_not_know_is_skipped() -> None:
+    """A key from a different build would otherwise file answers under the
+    wrong adapter and still produce a table."""
+    responses = [{"rater": "a", "answers": {"99": {"ukiyo": 5, "baroque": 5, "content": 5}}}]
+
+    assert ratings_by_source(responses, KEY) == {}
+
+
+def test_a_skipped_question_does_not_become_a_zero() -> None:
+    responses = [{"rater": "a", "answers": {"2": {"ukiyo": 4, "content": 3}}}]
+
+    collected = ratings_by_source(responses, KEY)
+
+    assert collected["Ukiyo_e"]["ukiyo"] == [4]
+    assert collected["Ukiyo_e"]["baroque"] == []
