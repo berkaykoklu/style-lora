@@ -24,8 +24,10 @@ export default async function handler(request, response) {
   // this project's own credentials, which is the whole point of it being private.
   const all = await Promise.all(
     blobs.map(async (blob) => {
+      // get() resolves { stream, headers, blob } or null -- there is no status
+      // code on it, and a 304 arrives as a null stream.
       const file = await get(blob.pathname, { access: 'private' });
-      if (!file || file.statusCode !== 200) {
+      if (!file || !file.stream) {
         return { stored: blob.uploadedAt, error: 'unreadable', pathname: blob.pathname };
       }
       const text = await new Response(file.stream).text();
