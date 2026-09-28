@@ -17,3 +17,7 @@ style-lora-results/
 
 # Someone else's notebook, kept locally for reference
 stable-diffusion-1-5-lora-fine-tuning.ipynb
+
+# The blind test answer key and the form it belongs to; kept off the public repo.
+key.json
+degerlendirme.html

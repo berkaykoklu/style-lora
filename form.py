@@ -41,23 +41,87 @@ QUESTIONS = (
 )
 
 
+# What the prompt says, in Turkish.
+#
+# The model is prompted in English and always will be -- it was trained that
+# way. But the third question asks whether what the prompt describes is actually
+# in the picture, and someone who cannot read the prompt cannot answer it. So
+# the English goes to the model and to the answer key, and the Turkish goes on
+# the card.
+TURKISH = {
+    "a woman holding a lantern": "elinde fener tutan bir kadın",
+    "a knight standing in a doorway": "kapı eşiğinde duran bir şövalye",
+    "a fox in a forest clearing": "orman açıklığında bir tilki",
+    "a city street after rain": "yağmurdan sonra bir şehir sokağı",
+    "a young man reading a letter": "mektup okuyan genç bir adam",
+    "a harbour at sunrise": "gün doğumunda bir liman",
+    "a cat asleep on a windowsill": "pencere kenarında uyuyan bir kedi",
+    "two people talking at a table": "masada konuşan iki kişi",
+    "a horse in an open field": "açık bir tarlada bir at",
+    "a staircase in an empty hall": "boş bir salonda bir merdiven",
+    "a bowl of fruit on a cloth": "kumaş üzerinde bir kâse meyve",
+    "a traveller on a mountain path": "dağ yolunda bir yolcu",
+    "a woman combing her long hair": "uzun saçlarını tarayan bir kadın",
+    "a bridge over a river in the rain": "yağmurda nehrin üzerinde bir köprü",
+    "a fisherman pulling in a net": "ağını çeken bir balıkçı",
+    "an old man drinking from a cup": "fincandan içen yaşlı bir adam",
+    "a group of travellers resting under a tree": "ağaç altında dinlenen yolcular",
+    "a mountain seen across water": "suyun karşısından görünen bir dağ",
+    "a woman holding a fan": "elinde yelpaze tutan bir kadın",
+    "two warriors facing each other": "karşı karşıya duran iki savaşçı",
+    "a child chasing a bird": "kuş kovalayan bir çocuk",
+    "a boat on a rough sea": "dalgalı denizde bir tekne",
+    "a garden gate at dusk": "alacakaranlıkta bir bahçe kapısı",
+    "a street of shops in the evening": "akşam vakti dükkânlarla dolu bir sokak",
+    "a musician playing an instrument": "çalgı çalan bir müzisyen",
+    "a table set for a meal": "yemek için kurulmuş bir masa",
+    "a dog lying by a fire": "ateşin yanında yatan bir köpek",
+    "a woman carrying water": "su taşıyan bir kadın",
+    "a tree in blossom beside a path": "patika kenarında çiçek açmış bir ağaç",
+    "a man asleep in a chair": "koltukta uyuyan bir adam",
+}
+
+
+def turkish(prompt: str) -> str:
+    """The card's text. Falls back to the English rather than to nothing -- an
+    untranslated prompt is readable; a blank one makes the question unanswerable."""
+    return TURKISH.get(prompt, prompt)
+
+
 @dataclass(frozen=True)
 class Item:
     path: Path
     source: str  # "base", or the style whose adapter drew it
     prompt: str
+    # An already-encoded JPEG, when the image came out of an earlier form rather
+    # than off disk. Re-encoding it would put a second generation of JPEG on a
+    # picture someone is about to judge for texture.
+    encoded: str = ""
 
 
-def _embed(path: Path) -> str:
-    with Image.open(path) as image:
+def _embed(item: Item) -> str:
+    if item.encoded:
+        return item.encoded
+    with Image.open(item.path) as image:
         square = image.convert("RGB").resize((THUMB, THUMB), Image.Resampling.LANCZOS)
     buffer = io.BytesIO()
     square.save(buffer, "JPEG", quality=QUALITY)
     return base64.b64encode(buffer.getvalue()).decode()
 
 
-def build(items: list[Item], out_html: Path, out_key: Path, seed: int = 0) -> Path:
-    """Write the form and, beside it, the answer key it does not contain."""
+def build(
+    items: list[Item],
+    out_html: Path,
+    out_key: Path,
+    seed: int = 0,
+    submit_url: str = "",
+) -> Path:
+    """Write the form and, beside it, the answer key it does not contain.
+
+    With `submit_url` the finished answers are posted there. Without one the
+    page hands the viewer a file instead. The download stays available either
+    way: a deploy that is down should cost an email, not an hour of someone's
+    afternoon."""
     if not items:
         raise ValueError("no items to rate")
 
@@ -88,11 +152,15 @@ def build(items: list[Item], out_html: Path, out_key: Path, seed: int = 0) -> Pa
         )
         cards.append(
             f'<article id="card{i}"><header><span class="n">{i} / {len(shuffled)}</span>'
-            f'<span class="p">{item.prompt}</span></header>'
-            f'<img src="data:image/jpeg;base64,{_embed(item.path)}" alt="">{rows}</article>'
+            f'<span class="p">{turkish(item.prompt)}</span></header>'
+            f'<img src="data:image/jpeg;base64,{_embed(item)}" alt="">{rows}</article>'
         )
 
-    html = _PAGE.replace("__CARDS__", "\n".join(cards)).replace("__TOTAL__", str(len(shuffled)))
+    html = (
+        _PAGE.replace("__CARDS__", "\n".join(cards))
+        .replace("__TOTAL__", str(len(shuffled)))
+        .replace("__SUBMIT__", json.dumps(submit_url))
+    )
     out_html.write_text(html, encoding="utf-8")
     return out_html
 
@@ -202,13 +270,40 @@ __CARDS__
     });
   });
 
-  document.getElementById("save").addEventListener("click", () => {
+  const SUBMIT = __SUBMIT__;
+
+  function download() {
     const blob = new Blob([JSON.stringify(answers, null, 2)], {type: "application/json"});
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "stil-degerlendirme.json";
     a.click();
     URL.revokeObjectURL(a.href);
+  }
+
+  document.getElementById("save").addEventListener("click", async () => {
+    const save = document.getElementById("save"), hint = document.getElementById("hint");
+    if (!SUBMIT) { download(); return; }
+
+    save.disabled = true;
+    save.textContent = "Gönderiliyor...";
+    try {
+      const res = await fetch(SUBMIT, {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({answers: answers, finishedAt: new Date().toISOString()}),
+      });
+      if (!res.ok) throw new Error(res.status);
+      save.textContent = "Gönderildi, teşekkürler";
+      hint.textContent = "Başka bir şey yapmana gerek yok.";
+    } catch (e) {
+      // A deploy that is down should cost an email, not the afternoon someone
+      // already spent filling this in.
+      save.disabled = false;
+      save.textContent = "Dosyayı indir";
+      hint.textContent = "Gönderilemedi. Dosyayı indirip yollayabilir misin?";
+      save.onclick = download;
+    }
   });
 
   refresh();

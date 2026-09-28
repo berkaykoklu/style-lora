@@ -81,3 +81,50 @@ def test_the_images_are_carried_in_the_file(tmp_path: Path) -> None:
 def test_an_empty_form_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         build([], tmp_path / "f.html", tmp_path / "k.json")
+
+
+# --- what the rater reads ---------------------------------------------------
+
+
+def test_the_card_shows_the_prompt_in_turkish(tmp_path: Path) -> None:
+    """The model is prompted in English and always will be. But the content
+    question asks whether what the prompt describes is in the picture, and
+    someone who cannot read it cannot answer."""
+    from form import TURKISH
+
+    path = tmp_path / "00.png"
+    Image.new("RGB", (64, 64)).save(path)
+    english = "a knight standing in a doorway"
+    item = Item(path=path, source="base", prompt=english)
+    build([item], tmp_path / "f.html", tmp_path / "k.json")
+
+    html = (tmp_path / "f.html").read_text()
+    assert TURKISH[english] in html
+    assert english not in html
+
+
+def test_the_key_keeps_the_english(tmp_path: Path) -> None:
+    """Scoring joins on the prompt, and the rest of the project speaks English."""
+    path = tmp_path / "00.png"
+    Image.new("RGB", (64, 64)).save(path)
+    english = "a fox in a forest clearing"
+    item = Item(path=path, source="base", prompt=english)
+    build([item], tmp_path / "f.html", tmp_path / "k.json")
+
+    assert json.loads((tmp_path / "k.json").read_text())[0]["prompt"] == english
+
+
+def test_every_measurement_prompt_has_a_translation() -> None:
+    """A missing one falls back to English, which is readable but leaves the
+    friend guessing on that card."""
+    from form import TURKISH
+    from stylelora.generate import PROMPTS
+
+    for prompt in PROMPTS:
+        assert prompt in TURKISH, prompt
+
+
+def test_an_unknown_prompt_falls_back_rather_than_blanks(tmp_path: Path) -> None:
+    from form import turkish
+
+    assert turkish("a thing nobody translated") == "a thing nobody translated"
