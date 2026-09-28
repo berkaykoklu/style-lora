@@ -21,6 +21,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from stylelora.prompts import turkish
+
 # Small enough that a hundred of them fit in a file worth emailing, large enough
 # to judge a brushstroke. 384px JPEG at 80 is about 35 KB.
 THUMB = 384
@@ -39,53 +41,6 @@ QUESTIONS = (
     ("baroque", "Ne kadar Barok yağlıboya?"),
     ("content", "Yazan şey görselde ne kadar var?"),
 )
-
-
-# What the prompt says, in Turkish.
-#
-# The model is prompted in English and always will be -- it was trained that
-# way. But the third question asks whether what the prompt describes is actually
-# in the picture, and someone who cannot read the prompt cannot answer it. So
-# the English goes to the model and to the answer key, and the Turkish goes on
-# the card.
-TURKISH = {
-    "a woman holding a lantern": "elinde fener tutan bir kadın",
-    "a knight standing in a doorway": "kapı eşiğinde duran bir şövalye",
-    "a fox in a forest clearing": "orman açıklığında bir tilki",
-    "a city street after rain": "yağmurdan sonra bir şehir sokağı",
-    "a young man reading a letter": "mektup okuyan genç bir adam",
-    "a harbour at sunrise": "gün doğumunda bir liman",
-    "a cat asleep on a windowsill": "pencere kenarında uyuyan bir kedi",
-    "two people talking at a table": "masada konuşan iki kişi",
-    "a horse in an open field": "açık bir tarlada bir at",
-    "a staircase in an empty hall": "boş bir salonda bir merdiven",
-    "a bowl of fruit on a cloth": "kumaş üzerinde bir kâse meyve",
-    "a traveller on a mountain path": "dağ yolunda bir yolcu",
-    "a woman combing her long hair": "uzun saçlarını tarayan bir kadın",
-    "a bridge over a river in the rain": "yağmurda nehrin üzerinde bir köprü",
-    "a fisherman pulling in a net": "ağını çeken bir balıkçı",
-    "an old man drinking from a cup": "fincandan içen yaşlı bir adam",
-    "a group of travellers resting under a tree": "ağaç altında dinlenen yolcular",
-    "a mountain seen across water": "suyun karşısından görünen bir dağ",
-    "a woman holding a fan": "elinde yelpaze tutan bir kadın",
-    "two warriors facing each other": "karşı karşıya duran iki savaşçı",
-    "a child chasing a bird": "kuş kovalayan bir çocuk",
-    "a boat on a rough sea": "dalgalı denizde bir tekne",
-    "a garden gate at dusk": "alacakaranlıkta bir bahçe kapısı",
-    "a street of shops in the evening": "akşam vakti dükkânlarla dolu bir sokak",
-    "a musician playing an instrument": "çalgı çalan bir müzisyen",
-    "a table set for a meal": "yemek için kurulmuş bir masa",
-    "a dog lying by a fire": "ateşin yanında yatan bir köpek",
-    "a woman carrying water": "su taşıyan bir kadın",
-    "a tree in blossom beside a path": "patika kenarında çiçek açmış bir ağaç",
-    "a man asleep in a chair": "koltukta uyuyan bir adam",
-}
-
-
-def turkish(prompt: str) -> str:
-    """The card's text. Falls back to the English rather than to nothing -- an
-    untranslated prompt is readable; a blank one makes the question unanswerable."""
-    return TURKISH.get(prompt, prompt)
 
 
 @dataclass(frozen=True)

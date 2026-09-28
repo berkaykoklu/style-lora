@@ -90,7 +90,7 @@ def test_the_card_shows_the_prompt_in_turkish(tmp_path: Path) -> None:
     """The model is prompted in English and always will be. But the content
     question asks whether what the prompt describes is in the picture, and
     someone who cannot read it cannot answer."""
-    from form import TURKISH
+    from stylelora.prompts import TURKISH
 
     path = tmp_path / "00.png"
     Image.new("RGB", (64, 64)).save(path)
@@ -117,15 +117,15 @@ def test_the_key_keeps_the_english(tmp_path: Path) -> None:
 def test_every_measurement_prompt_has_a_translation() -> None:
     """A missing one falls back to English, which is readable but leaves the
     friend guessing on that card."""
-    from form import TURKISH
     from stylelora.generate import PROMPTS
+    from stylelora.prompts import TURKISH
 
     for prompt in PROMPTS:
         assert prompt in TURKISH, prompt
 
 
 def test_an_unknown_prompt_falls_back_rather_than_blanks(tmp_path: Path) -> None:
-    from form import turkish
+    from stylelora.prompts import turkish
 
     assert turkish("a thing nobody translated") == "a thing nobody translated"
 
