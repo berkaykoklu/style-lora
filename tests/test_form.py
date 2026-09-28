@@ -183,3 +183,18 @@ def test_a_partly_finished_form_can_still_be_sent(tmp_path: Path) -> None:
     html = (tmp_path / "f.html").read_text()
     assert "save.disabled = done === 0;" in html
     assert "done === TOTAL" not in html.split("function refresh()")[1].split("}")[0]
+
+
+def test_each_browser_carries_a_stable_id(tmp_path: Path) -> None:
+    """Every press of Gönder used to arrive as a separate anonymous record, so
+    a second rater and a second attempt by the first were the same thing."""
+    path = tmp_path / "00.png"
+    Image.new("RGB", (64, 64)).save(path)
+    item = Item(path=path, source="base", prompt="a fox in a forest clearing")
+
+    build([item], tmp_path / "f.html", tmp_path / "k.json", submit_url="/api/submit")
+
+    html = (tmp_path / "f.html").read_text()
+    assert 'localStorage.getItem(RATER_KEY)' in html
+    assert "rater: RATER," in html
+    assert "answered: complete()," in html

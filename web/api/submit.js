@@ -14,7 +14,7 @@ export default async function handler(request, response) {
 
   const body = request.body;
   if (!body || typeof body !== 'object' || typeof body.answers !== 'object') {
-    return response.status(400).json({ error: 'expected {answers, finishedAt}' });
+    return response.status(400).json({ error: 'expected {rater, answers, finishedAt}' });
   }
 
   const serialised = JSON.stringify(body);
@@ -44,7 +44,7 @@ export default async function handler(request, response) {
     });
     // The URL is deliberately not returned: nothing downstream needs it, and a
     // page that knows where the answers live is a page that can read them all.
-    console.log('stored', saved.pathname);
+    console.log('stored', saved.pathname, 'rater', body.rater, 'answered', body.answered);
     return response.status(200).json({ ok: true });
   } catch (error) {
     // The message, not a stack. Whoever is filling this in cannot fix it, but

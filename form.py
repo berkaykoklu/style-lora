@@ -231,6 +231,25 @@ __CARDS__
 <script>
   const TOTAL = __TOTAL__, KEY = "style-eval-v1", SUBMIT = __SUBMIT__;
 
+  // A stable id per browser, so several sends from one person collapse into one
+  // rating and two people never look like one. Without it every press of Gönder
+  // arrived as a separate anonymous record and nothing could tell a second
+  // rater from a second attempt.
+  const RATER_KEY = "style-eval-rater";
+  let RATER;
+  try {
+    RATER = localStorage.getItem(RATER_KEY);
+    if (!RATER) {
+      RATER = (crypto.randomUUID ? crypto.randomUUID()
+                                 : String(Date.now()) + Math.random().toString(36).slice(2));
+      localStorage.setItem(RATER_KEY, RATER);
+    }
+  } catch (e) {
+    // Private windows and blocked storage: the rating still counts, it just
+    // cannot be joined to an earlier partial one.
+    RATER = "anon-" + Math.random().toString(36).slice(2);
+  }
+
   // The button and the closing sentence say what will actually happen. They were
   // hardcoded to the download wording once, and a page that posts while its
   // button promises a file is a page nobody trusts twice.
@@ -307,7 +326,13 @@ __CARDS__
       const res = await fetch(SUBMIT, {
         method: "POST",
         headers: {"content-type": "application/json"},
-        body: JSON.stringify({answers: answers, finishedAt: new Date().toISOString()}),
+        body: JSON.stringify({
+          rater: RATER,
+          answered: complete(),
+          total: TOTAL,
+          answers: answers,
+          finishedAt: new Date().toISOString(),
+        }),
       });
       if (!res.ok) throw new Error(res.status);
       save.textContent = "Gönderildi, teşekkürler";
