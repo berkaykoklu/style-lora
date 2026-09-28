@@ -214,8 +214,9 @@ _PAGE = """<!doctype html>
 <body><div class="wrap">
 <h1>Stil değerlendirme</h1>
 <p class="intro">Her görsel için üç soru, 1 (hiç) – 5 (tamamen). Görsellerin nereden
-geldiği yazmıyor; ilk izlenimine göre ver, uzun düşünme. Cevapların tarayıcıda
-saklanıyor, sekmeyi kapatsan da kaybolmuyor. <span id="outro"></span></p>
+geldiği yazmıyor; ilk izlenimine göre ver, uzun düşünme. <b>Hepsini doldurmak
+zorunda değilsin</b> — ne kadar yaptıysan o kadarı işimize yarıyor. Cevapların
+tarayıcıda saklanıyor, sekmeyi kapatsan da kaybolmuyor. <span id="outro"></span></p>
 
 <div class="bar"><div class="track"><div class="fill" id="fill"></div></div>
 <p id="count">0 / __TOTAL__ tamamlandı</p></div>
@@ -256,12 +257,18 @@ __CARDS__
     const done = complete();
     document.getElementById("fill").style.width = (100 * done / TOTAL) + "%";
     document.getElementById("count").textContent = done + " / " + TOTAL + " tamamlandı";
-    const ready = done === TOTAL;
-    document.getElementById("save").disabled = !ready;
-    document.getElementById("hint").textContent = ready
-      ? (SUBMIT ? "Hepsi tamam. Gönder'e basabilirsin."
-                : "Teşekkürler. Dosyayı indirip geri yolla.")
-      : "Hepsi doldurulunca aktifleşir.";
+
+    // Sendable from the first answer on. Requiring all of them meant someone who
+    // did forty and stopped gave us nothing, which is a bad trade for a favour:
+    // forty answers are forty answers, and the scoring handles the gaps.
+    const save = document.getElementById("save");
+    save.disabled = done === 0;
+    save.textContent = done && done < TOTAL ? SEND_LABEL + " (" + done + ")" : SEND_LABEL;
+    document.getElementById("hint").textContent =
+      done === 0 ? "İlk kartı doldurunca aktifleşir."
+      : done < TOTAL ? "İstediğin an gönderebilirsin; boş kalanlar sorun değil."
+      : (SUBMIT ? "Hepsi tamam. Gönder'e basabilirsin."
+                : "Teşekkürler. Dosyayı indirip geri yolla.");
   }
 
   document.querySelectorAll(".scale").forEach(scale => {

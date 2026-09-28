@@ -169,3 +169,17 @@ def test_the_submit_constant_exists_before_anything_reads_it(tmp_path: Path) -> 
 
     html = (tmp_path / "f.html").read_text()
     assert html.index("SUBMIT = ") < html.index("function refresh()")
+
+
+def test_a_partly_finished_form_can_still_be_sent(tmp_path: Path) -> None:
+    """Requiring every answer meant someone who did forty of forty-eight and
+    stopped gave us nothing. Forty answers are forty answers."""
+    path = tmp_path / "00.png"
+    Image.new("RGB", (64, 64)).save(path)
+    item = Item(path=path, source="base", prompt="a fox in a forest clearing")
+
+    build([item], tmp_path / "f.html", tmp_path / "k.json", submit_url="/api/submit")
+
+    html = (tmp_path / "f.html").read_text()
+    assert "save.disabled = done === 0;" in html
+    assert "done === TOTAL" not in html.split("function refresh()")[1].split("}")[0]
