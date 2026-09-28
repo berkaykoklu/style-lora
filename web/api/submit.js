@@ -22,6 +22,17 @@ export default async function handler(request, response) {
     return response.status(413).json({ error: 'too large' });
   }
 
+  // The commonest failure by far, and invisible from the outside: the Blob store
+  // exists but the deployment predates it, so the token was never injected.
+  // Named here rather than left as a generic 500, because the fix is a redeploy
+  // and nothing in a generic 500 says so.
+  if (!process.env.BLOB_READ_WRITE_TOKEN && !process.env.BLOB_STORE_ID) {
+    return response.status(500).json({
+      error: 'no blob store connected',
+      fix: 'Vercel > Storage > create a Blob store, connect it to this project, then redeploy',
+    });
+  }
+
   try {
     const saved = await put(`responses/${Date.now()}.json`, serialised, {
       access: 'public',
@@ -33,7 +44,10 @@ export default async function handler(request, response) {
     console.log('stored', saved.pathname);
     return response.status(200).json({ ok: true });
   } catch (error) {
+    // The message, not a stack. Whoever is filling this in cannot fix it, but
+    // whoever deployed it can, and "could not store" told neither of them
+    // anything.
     console.error('store failed', error);
-    return response.status(500).json({ error: 'could not store' });
+    return response.status(500).json({ error: 'could not store', detail: String(error && error.message || error) });
   }
 }

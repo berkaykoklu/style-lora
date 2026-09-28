@@ -14,6 +14,10 @@ export default async function handler(request, response) {
     return response.status(401).json({ error: 'bad token' });
   }
 
+  if (!process.env.BLOB_READ_WRITE_TOKEN && !process.env.BLOB_STORE_ID) {
+    return response.status(500).json({ error: 'no blob store connected' });
+  }
+
   const { blobs } = await list({ prefix: 'responses/' });
   const all = await Promise.all(
     blobs.map(async (blob) => {
