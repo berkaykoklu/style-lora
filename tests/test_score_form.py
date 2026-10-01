@@ -65,3 +65,26 @@ def test_a_skipped_question_does_not_become_a_zero() -> None:
 
     assert collected["Ukiyo_e"]["ukiyo"] == [4]
     assert collected["Ukiyo_e"]["baroque"] == []
+
+
+def test_ratings_given_against_an_older_form_are_dropped() -> None:
+    """Rebuilding the form reshuffles it, so an old rating is about a different
+    picture than its card number now names -- and nothing in the data says so."""
+    from score_form import after
+
+    responses = [
+        {"stored": "2026-09-28T22:16:57.000Z", "rater": "old"},
+        {"stored": "2026-10-01T11:42:50.000Z", "rater": "new"},
+    ]
+
+    kept = after(responses, "2026-10-01")
+
+    assert [r["rater"] for r in kept] == ["new"]
+
+
+def test_a_response_with_no_timestamp_is_dropped_by_a_cutoff() -> None:
+    """The earliest records predate both the rater id and the field; they are
+    the oldest of all and must not slip through as unknown."""
+    from score_form import after
+
+    assert after([{"rater": "a"}], "2026-10-01") == []

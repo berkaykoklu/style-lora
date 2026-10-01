@@ -47,6 +47,17 @@ def latest_per_rater(responses: Iterable[Response]) -> list[Response]:
     return list(best.values())
 
 
+def after(responses: Iterable[Response], cutoff: str) -> list[Response]:
+    """Only ratings made against the key we still hold.
+
+    Rebuilding the form reshuffles it, so a rating given against an older build
+    is about a different picture than its card number now names. Nothing in the
+    data says so -- the numbers still join, the table still prints -- which is
+    why the cutoff is a date rather than a list of ids to remember.
+    """
+    return [r for r in responses if str(r.get("stored", "")) >= cutoff]
+
+
 def ratings_by_source(
     responses: list[Response], key: list[dict[str, Any]]
 ) -> dict[str, dict[str, list[int]]]:
@@ -75,10 +86,20 @@ def main() -> None:
     parser.add_argument("results", type=Path)
     parser.add_argument("--key", type=Path, default=Path("key.json"))
     parser.add_argument("--exclude", nargs="*", default=[], help="rater ids to drop")
+    parser.add_argument(
+        "--since",
+        default="",
+        help="drop ratings stored before this ISO timestamp -- anything older was "
+        "given against a previous build of the form and a different card order",
+    )
     args = parser.parse_args()
 
     payload = json.loads(args.results.read_text())
     responses = payload["responses"] if isinstance(payload, dict) else payload
+    if args.since:
+        before = len(responses)
+        responses = after(responses, args.since)
+        print(f"dropped {before - len(responses)} rating(s) given against an older form\n")
     kept = [r for r in latest_per_rater(responses) if r.get("rater") not in args.exclude]
     if not kept:
         raise SystemExit("no ratings left after dropping test submissions")
