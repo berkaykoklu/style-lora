@@ -18,6 +18,7 @@ import argparse
 import json
 import statistics
 from collections.abc import Iterable
+from math import comb
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +78,52 @@ def ratings_by_source(
     return collected
 
 
+def sign_test(differences: list[int]) -> float:
+    """Two-sided probability of seeing a split this lopsided by chance alone.
+
+    A sign test rather than a t-test: these are 1-5 ratings, where the distance
+    from 1 to 2 is not the distance from 4 to 5, so only the direction of each
+    change is worth trusting. Ties carry no direction and are dropped, which is
+    what makes eight drops out of eight non-ties stronger evidence than eight
+    drops out of sixteen cards.
+    """
+    up = sum(1 for d in differences if d > 0)
+    down = sum(1 for d in differences if d < 0)
+    n = up + down
+    if n == 0:
+        return 1.0
+    extreme = max(up, down)
+    tail = sum(comb(n, i) for i in range(extreme, n + 1))
+    return min(1.0, 2 * tail / 2**n)
+
+
+def paired(
+    responses: list[Response], key: list[dict[str, Any]], source: str, question: str
+) -> list[int]:
+    """One difference per prompt: the adapter's rating minus the base model's.
+
+    Paired on the prompt, because a prompt the model draws badly drags both down
+    and a prompt it draws well lifts both. Comparing the two averages instead
+    would carry that noise into the answer; the difference per prompt cancels it.
+    """
+    answers_of: dict[str, dict[str, dict[str, Any]]] = {}
+    source_of = {str(row["n"]): (row["source"], row["prompt"]) for row in key}
+    for response in responses:
+        for card, answers in response.get("answers", {}).items():
+            found = source_of.get(str(card))
+            if found:
+                answers_of.setdefault(found[1], {})[found[0]] = answers
+
+    differences = []
+    for sides in answers_of.values():
+        here, base = sides.get(source), sides.get("base")
+        if here is None or base is None:
+            continue
+        if isinstance(here.get(question), int) and isinstance(base.get(question), int):
+            differences.append(here[question] - base[question])
+    return differences
+
+
 def _mean(values: list[int]) -> float:
     return statistics.fmean(values) if values else float("nan")
 
@@ -120,20 +167,25 @@ def main() -> None:
             f"{_mean(scores['content']):>11.2f}{counts:>6}"
         )
 
-    base = collected.get("base")
-    if not base:
-        return
-    print("\ntaban modele göre fark:")
-    for source, question in (("Ukiyo_e", "ukiyo"), ("Baroque", "baroque")):
-        scores = collected.get(source)
-        if scores:
-            lift = _mean(scores[question]) - _mean(base[question])
-            print(f"  {source:14} {question:9} {lift:+.2f}")
-    for source in ("Ukiyo_e", "Baroque"):
-        scores = collected.get(source)
-        if scores:
-            cost = _mean(scores["content"]) - _mean(base["content"])
-            print(f"  {source:14} {'içerik':9} {cost:+.2f}")
+    print("\nprompt bazında eşleştirilmiş, taban modele karşı:\n")
+    print(f"{'karşılaştırma':38}{'ort':>7}{'yukarı':>8}{'eşit':>6}{'aşağı':>7}{'p':>9}")
+    print("-" * 75)
+    pairs = [
+        ("Ukiyo_e", "ukiyo"), ("Baroque", "baroque"),
+        ("Ukiyo_e", "baroque"), ("Baroque", "ukiyo"),
+        ("Ukiyo_e", "content"), ("Baroque", "content"),
+    ]
+    for source, question in pairs:
+        differences = paired(kept, key, source, question)
+        if not differences:
+            continue
+        up = sum(1 for d in differences if d > 0)
+        down = sum(1 for d in differences if d < 0)
+        label = f"{source} -> {question}"
+        print(
+            f"{label:38}{_mean(differences):>+7.2f}{up:>8}{len(differences) - up - down:>6}"
+            f"{down:>7}{sign_test(differences):>9.4f}"
+        )
 
 
 if __name__ == "__main__":

@@ -88,3 +88,63 @@ def test_a_response_with_no_timestamp_is_dropped_by_a_cutoff() -> None:
     from score_form import after
 
     assert after([{"rater": "a"}], "2026-10-01") == []
+
+
+# --- the sign test ----------------------------------------------------------
+
+
+def test_every_change_in_one_direction_is_unlikely() -> None:
+    from score_form import sign_test
+
+    assert sign_test([1] * 8) < 0.01
+
+
+def test_an_even_split_is_not_evidence() -> None:
+    from score_form import sign_test
+
+    assert sign_test([1, 1, 1, 1, -1, -1, -1, -1]) == 1.0
+
+
+def test_ties_are_dropped_not_counted_as_agreement() -> None:
+    """Eight drops out of eight non-ties is stronger evidence than eight drops
+    out of sixteen cards, and counting the ties would hide that."""
+    from score_form import sign_test
+
+    with_ties = sign_test([-1] * 8 + [0] * 8)
+    without = sign_test([-1] * 8)
+
+    assert with_ties == without
+
+
+def test_no_direction_at_all_is_no_evidence() -> None:
+    from score_form import sign_test
+
+    assert sign_test([0, 0, 0]) == 1.0
+
+
+def test_pairing_is_on_the_prompt_not_the_card() -> None:
+    """A prompt the model draws badly drags both the base and the adapter down.
+    Comparing two averages would carry that noise into the answer."""
+    from score_form import paired
+
+    key = [
+        {"n": 1, "source": "base", "prompt": "hard one"},
+        {"n": 2, "source": "Ukiyo_e", "prompt": "hard one"},
+        {"n": 3, "source": "base", "prompt": "easy one"},
+        {"n": 4, "source": "Ukiyo_e", "prompt": "easy one"},
+    ]
+    responses = [{"rater": "a", "answers": {
+        "1": {"ukiyo": 1}, "2": {"ukiyo": 3},
+        "3": {"ukiyo": 2}, "4": {"ukiyo": 4},
+    }}]
+
+    assert sorted(paired(responses, key, "Ukiyo_e", "ukiyo")) == [2, 2]
+
+
+def test_a_prompt_with_no_base_to_compare_against_is_skipped() -> None:
+    from score_form import paired
+
+    key = [{"n": 1, "source": "Ukiyo_e", "prompt": "lonely"}]
+    responses = [{"rater": "a", "answers": {"1": {"ukiyo": 5}}}]
+
+    assert paired(responses, key, "Ukiyo_e", "ukiyo") == []
