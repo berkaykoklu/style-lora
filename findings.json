@@ -1,0 +1,104 @@
+{
+  "project": "style-lora",
+  "question": "What does a style adapter cost in prompt adherence, and can the metric that measures it be trusted?",
+  "styles": ["Ukiyo_e", "Baroque"],
+  "publishing_rule": {
+    "allowed": "paired differences, gate numbers, CLIP curves, controls",
+    "withheld": "the rater's absolute 1-5 levels",
+    "why": "One rater, who paints, judged against real Ukiyo-e and real Baroque and marked accordingly. An absolute level is a verdict on forty training images; a paired difference is that rater's own scale compared against itself, which a harsh hand moves at both ends and therefore leaves intact."
+  },
+
+  "setup": {
+    "base_model": "sd-legacy/stable-diffusion-v1-5",
+    "dataset": "keremberke/painting-style-classification",
+    "images_per_style": 40,
+    "held_out_per_style": 20,
+    "rank": 32,
+    "batch": 4,
+    "gradient_accumulation": 2,
+    "steps": 1000,
+    "learning_rate_effective": 8e-05,
+    "snr_gamma": 5.0,
+    "captions": "BLIP, style words stripped",
+    "inference_steps": 30,
+    "guidance": 7.5,
+    "minutes_per_style_on_L4": 27.8
+  },
+
+  "gates": {
+    "provenance": "notebook cell 6, held-out images only",
+    "word_gate_accuracy": 1.0,
+    "word_gate_n": 40,
+    "within_Ukiyo_e": 0.796,
+    "within_Baroque": 0.668,
+    "between": 0.56,
+    "margin": 0.171,
+    "margin_floor": 0.05,
+    "note": "The abandoned pair (Baroque vs Art Nouveau on huggan/wikiart) reached 0.061 on the same measure."
+  },
+
+  "clip_separation_by_strength": {
+    "provenance": "notebook, 6 prompts x 2 seeds; axis = projection onto the text direction, centre = cosine to the held-out image mean",
+    "unit": "distance between the two adapters; 0 means they produce the same thing",
+    "rows": [
+      {"strength": 0.0, "axis": 0.0,   "axis_sd": 0.0,   "centre": 0.0,   "centre_sd": 0.0},
+      {"strength": 0.2, "axis": 0.002, "axis_sd": 0.008, "centre": 0.012, "centre_sd": 0.016},
+      {"strength": 0.4, "axis": 0.047, "axis_sd": 0.003, "centre": 0.067, "centre_sd": 0.009},
+      {"strength": 0.6, "axis": 0.080, "axis_sd": 0.002, "centre": 0.084, "centre_sd": 0.007},
+      {"strength": 0.8, "axis": 0.105, "axis_sd": 0.016, "centre": 0.101, "centre_sd": 0.009},
+      {"strength": 1.0, "axis": 0.116, "axis_sd": 0.009, "centre": 0.124, "centre_sd": 0.007}
+    ]
+  },
+
+  "clip_content_by_strength": {
+    "provenance": "notebook, 6 prompts x 1 seed; CLIP image-text similarity against the prompt",
+    "base": 0.319,
+    "rows": [
+      {"strength": 0.2, "Ukiyo_e": 0.327, "Baroque": 0.333},
+      {"strength": 0.4, "Ukiyo_e": 0.335, "Baroque": 0.352},
+      {"strength": 0.6, "Ukiyo_e": 0.330, "Baroque": 0.351},
+      {"strength": 0.8, "Ukiyo_e": 0.332, "Baroque": 0.338},
+      {"strength": 1.0, "Ukiyo_e": 0.339, "Baroque": 0.333}
+    ],
+    "reading": "Never below the base model at any strength. CLIP reports no cost at all."
+  },
+
+  "controls": {
+    "provenance": "notebook; each transform applied to the base model's own output",
+    "unit": "how far the transform alone moves the style axis, against the adapter's 0.104",
+    "sepia": 0.011,
+    "darken": 0.002,
+    "soften": -0.019,
+    "muted": 0.002,
+    "reading": "Tone earns about a tenth of what the adapter does, and blurring moves it the wrong way. The measure is not reading tone."
+  },
+
+  "human_blind_rating": {
+    "provenance": "score_form.py, blind form at style-lora-web.vercel.app",
+    "raters": 1,
+    "prompts": 16,
+    "cards": 48,
+    "date": "2026-10-01",
+    "strength_shown": {"Ukiyo_e": 1.2, "Baroque": 1.5},
+    "method": "Paired on the prompt against the base model; two-sided sign test on the directions, ties dropped.",
+    "comparisons": [
+      {"adapter": "Ukiyo_e", "question": "ukiyo", "mean_difference": 2.38, "up": 15, "tied": 1, "down": 0, "p": 0.0001},
+      {"adapter": "Baroque", "question": "baroque", "mean_difference": 1.31, "up": 13, "tied": 2, "down": 1, "p": 0.0018},
+      {"adapter": "Ukiyo_e", "question": "baroque", "mean_difference": -0.56, "up": 0, "tied": 10, "down": 6, "p": 0.0312},
+      {"adapter": "Baroque", "question": "ukiyo", "mean_difference": 0.25, "up": 4, "tied": 11, "down": 1, "p": 0.375},
+      {"adapter": "Ukiyo_e", "question": "content", "mean_difference": -1.06, "up": 4, "tied": 1, "down": 11, "p": 0.1185},
+      {"adapter": "Baroque", "question": "content", "mean_difference": -1.06, "up": 0, "tied": 8, "down": 8, "p": 0.0078}
+    ]
+  },
+
+  "headline": "CLIP's prompt score reports that the adapters cost nothing in content at any strength. A blind human rater says content falls about a point on five, and for one of the two styles that drop is on every prompt where it moved at all. The metric could not see the cost it was built to measure.",
+
+  "limits": [
+    "One rater. A second would close the largest gap in this result.",
+    "Sixteen prompts per source.",
+    "The two styles were shown at different strengths, 1.2 and 1.5, because that is where each looked right by eye. The test therefore judges two chosen operating points rather than two styles at one strength.",
+    "Both strengths are above 1.0, so part of the content cost is a consequence of that choice.",
+    "Forty training images per style. A rater comparing against real Ukiyo-e and real Baroque is comparing against something far out of reach of that.",
+    "The CLIP sweep used six prompts; the gate and the human rating used different, larger sets."
+  ]
+}
