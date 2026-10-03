@@ -105,7 +105,7 @@ measurements were taken at:
 from pathlib import Path
 from stylelora.generate import generate
 
-images = generate(Path("runs/Ukiyo_e/pytorch_lora_weights.safetensors"), 1.2,
+images = generate(Path("ukiyo-e.safetensors"), 1.2,
                   ("a woman holding a lantern",), seed=0)
 ```
 
@@ -119,7 +119,7 @@ pipe = StableDiffusionPipeline.from_pretrained(
     "sd-legacy/stable-diffusion-v1-5", torch_dtype=torch.float16
 ).to("cuda")
 
-pipe.load_lora_weights("runs/Ukiyo_e", weight_name="pytorch_lora_weights.safetensors")
+pipe.load_lora_weights(".", weight_name="ukiyo-e.safetensors")
 pipe.fuse_lora(lora_scale=1.2)
 
 image = pipe("a woman holding a lantern", num_inference_steps=30, guidance_scale=7.5).images[0]
@@ -152,10 +152,17 @@ assert pipe.get_list_adapters().get("unet"), "nothing was loaded"
 
 ### Where the weights are
 
-Not in this repository: `runs/` is ignored, and the two files are about 50 MB
-each. Training them takes under half an hour on one rented GPU —
-[`experiments.ipynb`](experiments.ipynb) does it end to end, and writes them to
-Drive so a dropped session costs one run rather than both.
+In the [v1 release](https://github.com/berkaykoklu/style-lora/releases/tag/v1),
+not in the history — two files of 24 MB each would be in every clone of this
+repository forever, and almost nobody cloning it wants them.
+
+```bash
+gh release download v1 --repo berkaykoklu/style-lora
+```
+
+Or train your own: under half an hour per style on one rented GPU.
+[`experiments.ipynb`](experiments.ipynb) does it end to end and writes to Drive,
+so a dropped session costs one run rather than both.
 
 ## Running it
 

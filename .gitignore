@@ -21,3 +21,6 @@ stable-diffusion-1-5-lora-fine-tuning.ipynb
 # The blind test answer key and the form it belongs to; kept off the public repo.
 key.json
 degerlendirme.html
+
+# Trained adapters live in a GitHub Release, not in the history.
+n40_r32_t1000_s0/
