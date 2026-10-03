@@ -123,6 +123,5 @@ a blind test.
 | `stylelora/score.py` | CLIP, the style centre, the text axis |
 | `stylelora/separation.py` | the gate that runs before training |
 | `stylelora/control.py` | the transforms that must not beat the adapter |
-| `stylelora/experiment.py` | sweep arithmetic, paired against the base model |
 | `form.py`, `score_form.py` | the blind rating form, and scoring it |
 | `findings.json` | every published number, with its provenance |

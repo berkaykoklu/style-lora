@@ -46,6 +46,10 @@ PROMPTS: tuple[str, ...] = (
 STEPS = 30
 GUIDANCE = 7.5
 
+# The strengths a sweep walks. Zero first: the base model is the reference every
+# row is read against, not an assumed floor.
+STRENGTHS: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+
 
 @lru_cache(maxsize=1)
 def _base_pipe() -> Any:
