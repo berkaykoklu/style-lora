@@ -93,6 +93,70 @@ strength to a single point regardless of rank, data or training length.
 - The CLIP sweep used six prompts; the gate and the rating used larger, different
   sets.
 
+## Using the adapters
+
+Two files, one per style, each a LoRA for `sd-legacy/stable-diffusion-v1-5`. They
+are not in this repository — see below.
+
+Through this repository's own helper, which fixes the seeds and settings the
+measurements were taken at:
+
+```python
+from pathlib import Path
+from stylelora.generate import generate
+
+images = generate(Path("runs/Ukiyo_e/pytorch_lora_weights.safetensors"), 1.2,
+                  ("a woman holding a lantern",), seed=0)
+```
+
+Or with plain diffusers:
+
+```python
+import torch
+from diffusers import StableDiffusionPipeline
+
+pipe = StableDiffusionPipeline.from_pretrained(
+    "sd-legacy/stable-diffusion-v1-5", torch_dtype=torch.float16
+).to("cuda")
+
+pipe.load_lora_weights("runs/Ukiyo_e", weight_name="pytorch_lora_weights.safetensors")
+pipe.fuse_lora(lora_scale=1.2)
+
+image = pipe("a woman holding a lantern", num_inference_steps=30, guidance_scale=7.5).images[0]
+
+pipe.unfuse_lora()
+pipe.unload_lora_weights()
+```
+
+Four things worth knowing, each of which cost time here:
+
+**Strength 1.2 for Ukiyo-e, 1.5 for Baroque.** Those are where each style looked
+right to the person who rated them, not a default. Baroque needing more is itself
+a finding: CLIP had the two separating about equally at 1.0.
+
+**No style words in the prompt.** Write the subject and nothing else. "A Japanese
+woodblock print of a lantern" lets the base model do the work and the adapter's
+contribution disappears into the wording.
+
+**Unfuse before loading another.** Fusing writes the adapter into the weights. A
+fused adapter left behind stacks onto the next one, and the output looks plausible
+either way.
+
+**Check it actually loaded.** `load_lora_weights` warns and carries on with the
+base model when the key names do not match, so a silent failure looks like a
+working run with a weak adapter:
+
+```python
+assert pipe.get_list_adapters().get("unet"), "nothing was loaded"
+```
+
+### Where the weights are
+
+Not in this repository: `runs/` is ignored, and the two files are about 50 MB
+each. Training them takes under half an hour on one rented GPU —
+[`experiments.ipynb`](experiments.ipynb) does it end to end, and writes them to
+Drive so a dropped session costs one run rather than both.
+
 ## Running it
 
 Training needs a GPU; everything else does not.
